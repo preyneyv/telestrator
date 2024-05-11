@@ -81,10 +81,7 @@ impl FeedSourceImpl for NDIFeedSource {
             match response {
                 ndi::FrameType::Video => {}
                 ndi::FrameType::ErrorFrame => bail!("NDI error frame received."),
-                ft => {
-                    println!("Ignoring NDI frame: {ft:?}");
-                    continue;
-                }
+                _ => continue,
             }
 
             let data = data.context("Failed to get video data from capture")?;
@@ -132,48 +129,6 @@ impl FeedSourceImpl for NDIFeedSource {
                 }
                 _ => bail!("Unsupported source color format {color:?}"),
             };
-
-            // let perf = self.recv.get_performance();
-            // let queue = self.recv.get_queue();
-
-            // print!(
-            //     "NDI: {} total, {} dropped, {} queued        \r",
-            //     perf.0.video_frames, perf.1.video_frames, queue.video_frames
-            // );
-
-            // {
-            //     let mut argb_u8 = vec![0u8; (width * height * 4)].into_boxed_slice();
-            //     let mut ycbcr = vec![0u8; raw_frame.len()].into_boxed_slice();
-            //     let roi = ffi::ippi::IppiSize {
-            //         width: width as _,
-            //         height: height as _,
-            //     };
-            //     let argb = unsafe {
-            //         let rv = ffi::ippi::ippiCbYCr422ToYCbCr422_8u_C2R(
-            //             raw_frame.as_ptr(),
-            //             line_stride as _,
-            //             ycbcr.as_mut_ptr(),
-            //             line_stride as _,
-            //             roi.clone(),
-            //         );
-            //         if rv != ffi::ippi::ippStsNoErr as i32 {
-            //             bail!("Received error from IPP (dbg): {}", rv);
-            //         }
-            //         let rv = ffi::ippi::ippiYCbCr422ToRGB_8u_C2C4R(
-            //             ycbcr.as_ptr(),
-            //             line_stride as _,
-            //             argb_u8.as_mut_ptr(),
-            //             (width * 4) as _,
-            //             roi.clone(),
-            //             0,
-            //         );
-            //         if rv != ffi::ippi::ippStsNoErr as i32 {
-            //             bail!("Received error from IPP (dbg): {}", rv);
-            //         }
-            //         argb_u8.align_to::<u32>().1
-            //     };
-            //     self.window.update_with_buffer(argb, width, height);
-            // }
 
             return Ok(Some(FeedFrame {
                 color,

@@ -7,19 +7,23 @@ use super::{FeedEncoder, FeedEncoderImpl};
 
 pub struct OpenH264FeedEncoder {
     encoder: openh264::encoder::Encoder,
+    frame_count: u16,
 }
 
 impl OpenH264FeedEncoder {
     pub fn new() -> Result<FeedEncoder> {
-        let config = openh264::encoder::EncoderConfig::new()
-            .enable_skip_frame(true)
-            .rate_control_mode(openh264::encoder::RateControlMode::Timestamp);
+        let config = openh264::encoder::EncoderConfig::new();
+        // .enable_skip_frame(true)
+        // .rate_control_mode(openh264::encoder::RateControlMode::Timestamp);
 
         let api = openh264::OpenH264API::from_source();
 
         let encoder = openh264::encoder::Encoder::with_api_config(api, config)?;
 
-        Ok(FeedEncoder::OpenH264(Self { encoder }))
+        Ok(FeedEncoder::OpenH264(Self {
+            encoder,
+            frame_count: 0,
+        }))
     }
 }
 
@@ -58,7 +62,11 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
 
         if force_keyframe {
             unsafe { self.encoder.raw_api().force_intra_frame(true) };
+        } else if self.frame_count % 240 == 0 {
+            unsafe { self.encoder.raw_api().force_intra_frame(false) };
+            self.frame_count = 0;
         }
+        self.frame_count += 1;
         let bitstream = self
             .encoder
             .encode_at(&yuv_source, Timestamp::from_millis((frame.pts / 100) as _))

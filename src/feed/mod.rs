@@ -41,7 +41,7 @@ fn main_loop(
 ) -> Result<()> {
     let mut source = source_config.make_source()?;
     let mut encoder = encoders::OpenH264FeedEncoder::new()?;
-    let mut force_keyframe = true;
+    let mut force_keyframe = false;
 
     loop {
         // Parse feed control messages before rendering next frame
@@ -62,7 +62,7 @@ fn main_loop(
         };
 
         let data = encoder.encode(&frame, force_keyframe)?.into_boxed_slice();
-        // force_keyframe = false;
+        force_keyframe = false;
 
         frame_ready_tx.send(Bytes::from(data)).ok();
     }
@@ -72,7 +72,6 @@ pub async fn main(
     frame_ready_tx: broadcast::Sender<BoxedBitstream>,
     feed_control_rx: mpsc::Receiver<FeedControlMessage>,
 ) -> Result<()> {
-    // let source = source::NDIFeedSource::build_interactive().context("Failed to build source")?;
     let source_config = sources::ndi::NDIFeedSourceConfig::build_interactive()
         .context("Failed to build source config")?;
     tokio::task::spawn_blocking(move || main_loop(source_config, frame_ready_tx, feed_control_rx))
