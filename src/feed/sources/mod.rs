@@ -3,25 +3,25 @@ pub mod ndi;
 use anyhow::Result;
 
 use self::ndi::NDIFeedSource;
-use super::FeedFrame;
 
+use super::frame::VideoFrameBuffer;
+
+#[enum_delegate::register]
 pub trait FeedSourceImpl {
-    fn get_frame(&mut self, timeout: u64) -> Result<Option<FeedFrame>>;
+    fn get_frame(&mut self) -> Result<Option<VideoFrameBuffer>>;
 }
 
-pub trait FeedSourceConfigImpl {
-    fn make_source(&self) -> Result<FeedSource>;
-}
-
+#[enum_delegate::implement(FeedSourceImpl)]
 pub enum FeedSource {
     NDI(NDIFeedSource),
 }
-pub type FeedSourceConfig = Box<dyn FeedSourceConfigImpl + Send>;
 
-impl FeedSourceImpl for FeedSource {
-    fn get_frame(&mut self, timeout: u64) -> Result<Option<FeedFrame>> {
-        match self {
-            Self::NDI(src) => src.get_frame(timeout),
-        }
-    }
+#[enum_delegate::register]
+pub trait FeedSourceConfigImpl {
+    fn build(&self) -> Result<FeedSource>;
+}
+
+#[enum_delegate::implement(FeedSourceConfigImpl)]
+pub enum FeedSourceConfig {
+    NDI(ndi::NDIFeedSourceConfig),
 }

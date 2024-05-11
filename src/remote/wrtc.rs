@@ -7,6 +7,7 @@ use tokio::{
     task::JoinHandle,
     try_join,
 };
+use uuid::Uuid;
 use warp::Filter;
 use webrtc::{
     api::{
@@ -25,7 +26,7 @@ use webrtc::{
     track::track_local::{track_local_static_sample::TrackLocalStaticSample, TrackLocal},
 };
 
-use crate::{feed::FeedControlMessage, BoxedBitstream};
+use crate::feed::manager::{FeedControlMessage, FeedResultMessage};
 
 #[derive(Debug)]
 pub struct WrtcOffer {
@@ -79,14 +80,16 @@ fn signalling_server(port: u16) -> (mpsc::Receiver<WrtcOffer>, JoinHandle<()>) {
     let server = warp::serve(offer_handler.or(static_handler).with(cors));
     let addr = SocketAddr::from_str(&format!("0.0.0.0:{port}")).unwrap();
     let task = tokio::task::spawn(server.run(addr));
+    println!("Remote listening on http://0.0.0.0:{port}");
     (offer_rx, task)
 }
 
 async fn webrtc_worker(
     offer: WrtcOffer,
-    mut frame_ready_rx: broadcast::Receiver<BoxedBitstream>,
+    mut feed_result_rx: broadcast::Receiver<FeedResultMessage>,
     feed_control_tx: mpsc::Sender<FeedControlMessage>,
 ) -> Result<()> {
+    let client_id = Uuid::new_v4().to_string();
     // Setup webrtc internals
     // TODO: see what can be moved out.
     let mut m = MediaEngine::default();
@@ -130,17 +133,24 @@ async fn webrtc_worker(
 
     let notify_video = notify_tx.clone();
     let video_done_tx = done_tx.clone();
-    tokio::spawn(async move {
+    let video_feed_ctrl_tx = feed_control_tx.clone();
+    let video_client_id = client_id.clone();
+
+    let video_task = tokio::spawn(async move {
         notify_video.notified().await;
         println!("ready to send video");
-        let _ = feed_control_tx
-            .send(FeedControlMessage::RequestKeyframe)
-            .await;
+        video_feed_ctrl_tx
+            .send(FeedControlMessage::ClientJoined {
+                client_id: video_client_id,
+            })
+            .await?;
+
         loop {
-            let data = match frame_ready_rx.recv().await {
-                Ok(data) => data,
+            let data = match feed_result_rx.recv().await {
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
+
+                Ok(FeedResultMessage::EncodedBitstream(data)) => data,
             };
 
             video_track
@@ -199,12 +209,18 @@ async fn webrtc_worker(
         _ = tokio::signal::ctrl_c() => {}
     }
 
+    video_task.abort();
+    feed_control_tx
+        .send(FeedControlMessage::ClientLeft { client_id })
+        .await?;
+    println!("goodbye thread");
+
     Ok(())
 }
 
 pub async fn run_webrtc_tasks(
-    frame_ready_tx: broadcast::Sender<BoxedBitstream>,
     feed_control_tx: mpsc::Sender<FeedControlMessage>,
+    frame_ready_tx: broadcast::Sender<FeedResultMessage>,
 ) -> Result<()> {
     let (mut sdp_rx, http_task) = signalling_server(8888);
 

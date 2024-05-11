@@ -2,14 +2,28 @@ mod wrtc;
 
 use anyhow::Result;
 use tokio::sync::{broadcast, mpsc};
+use uuid::Uuid;
 
-use crate::{feed::FeedControlMessage, BoxedBitstream};
+use crate::feed::manager::{FeedControlMessage, FeedResultMessage};
 
 pub async fn main(
-    frame_ready_tx: broadcast::Sender<BoxedBitstream>,
     feed_control_tx: mpsc::Sender<FeedControlMessage>,
+    feed_result_tx: broadcast::Sender<FeedResultMessage>,
 ) -> Result<()> {
-    wrtc::run_webrtc_tasks(frame_ready_tx.clone(), feed_control_tx).await?;
-
+    // wrtc::run_webrtc_tasks(feed_control_tx, feed_result_tx).await?;
+    let client_id = Uuid::new_v4().to_string();
+    feed_control_tx
+        .send(FeedControlMessage::ClientJoined {
+            client_id: client_id.clone(),
+        })
+        .await?;
     Ok(())
+    // loop {
+
+    //     feed_control_tx
+    //         .send(FeedControlMessage::ClientLeft {
+    //             client_id: client_id.clone(),
+    //         })
+    //         .await?;
+    // }
 }

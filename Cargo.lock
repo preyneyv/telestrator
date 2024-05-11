@@ -653,25 +653,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ffimage"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed0a72fa07ae1c1c2d50f9caeb30890b23596b73d1c2f6cd229a2ae658a15d36"
-dependencies = [
- "num-traits",
-]
-
-[[package]]
-name = "ffimage_yuv"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cf7ab943a8157f1f133a07ae728d5844b30d982e43f24c1098d6dc6cf38efb3"
-dependencies = [
- "ffimage",
- "num-traits",
-]
-
-[[package]]
 name = "fiat-crypto"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1421,22 +1402,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
-name = "openh264"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cea5160127089cf97aad654dd93f49f8291c0f2109c377d74f25804aa52c4ec7"
-dependencies = [
- "openh264-sys2",
-]
-
-[[package]]
 name = "openh264-sys2"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20816ce69e75372f2fbb8e655e71331ae32513df5cd6ac5aa1eaa76119cbc1e0"
 dependencies = [
  "cc",
+ "libloading",
  "nasm-rs",
+ "sha2",
  "walkdir",
 ]
 
@@ -2201,16 +2175,15 @@ dependencies = [
  "bindgen",
  "bytes",
  "enum_delegate",
- "ffimage",
- "ffimage_yuv",
  "minifb",
  "ndi",
- "openh264",
  "openh264-sys2",
  "serde",
  "serde_json",
  "static_dir",
+ "thiserror",
  "tokio",
+ "uuid",
  "warp",
  "webrtc",
 ]
@@ -2229,18 +2202,18 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "1.0.59"
+version = "1.0.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0126ad08bff79f29fc3ae6a55cc72352056dfff61e3ff8bb7129476d44b23aa"
+checksum = "579e9083ca58dd9dcf91a9923bb9054071b9ebbd800b342194c9feb0ee89fc18"
 dependencies = [
  "thiserror-impl",
 ]
 
 [[package]]
 name = "thiserror-impl"
-version = "1.0.59"
+version = "1.0.60"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1cd413b5d558b4c5bf3680e324a6fa5014e7b7c067a51e69dbdf47eb7148b66"
+checksum = "e2470041c06ec3ac1ab38d0356a6119054dedaea53e12fbefc0de730a1c08524"
 dependencies = [
  "proc-macro2",
  "quote",

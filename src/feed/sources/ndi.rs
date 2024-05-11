@@ -1,20 +1,20 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use bytes::Bytes;
+use ndi::VideoData;
 
-use crate::{
-    feed::{FeedColorType, FeedFrame},
-    ffi,
-};
+use crate::feed::frame::{VideoFrameBuffer, VideoFramePixelFormat, VideoFramerate};
 
 use super::{FeedSource, FeedSourceConfig, FeedSourceConfigImpl, FeedSourceImpl};
 
 pub struct NDIFeedSourceConfig {
     source: ndi::Source,
+    recv_timeout: u64,
 }
 
 impl FeedSourceConfigImpl for NDIFeedSourceConfig {
-    fn make_source(&self) -> Result<FeedSource> {
+    fn build(&self) -> Result<FeedSource> {
         let source = NDIFeedSource::new(self)?;
         Ok(FeedSource::NDI(source))
     }
@@ -41,20 +41,22 @@ impl NDIFeedSourceConfig {
 
         let source = sources[i].clone();
 
-        return Ok(Box::new(Self { source }));
+        return Ok(FeedSourceConfig::NDI(Self {
+            source,
+            recv_timeout: 10_000,
+        }));
     }
 }
 
 pub struct NDIFeedSource {
     recv: ndi::Recv,
-    // window: minifb::Window,
+    ndi_video_data: Option<VideoData>,
+    recv_timeout: Duration,
 }
 
 impl NDIFeedSource {
     /// Construct an NDIFeedSource for the provided source
     pub fn new(config: &NDIFeedSourceConfig) -> Result<Self> {
-        // let window = minifb::Window::new("ndi dbg", 1280, 720, Default::default())
-        //     .context("unable to create dbg window")?;
         Ok(NDIFeedSource {
             recv: ndi::RecvBuilder::new()
                 .allow_video_fields(false)
@@ -64,19 +66,18 @@ impl NDIFeedSource {
                 .source_to_connect_to(config.source.clone())
                 .build()
                 .context("Unable to build NDI receiver")?,
-            // window,
+            ndi_video_data: None,
+            recv_timeout: Duration::from_millis(config.recv_timeout),
         })
     }
 }
 
 impl FeedSourceImpl for NDIFeedSource {
     /// Read one frame from the source.
-    fn get_frame(&mut self, timeout: u64) -> Result<Option<FeedFrame>> {
-        let timeout = Duration::from_millis(timeout);
+    fn get_frame(&mut self) -> Result<Option<VideoFrameBuffer>> {
         let start = Instant::now();
-        while start.elapsed() < timeout {
-            let mut data = None;
-            let response = self.recv.capture_video(&mut data, 1000);
+        while start.elapsed() < self.recv_timeout {
+            let response = self.recv.capture_video(&mut self.ndi_video_data, 1000);
 
             match response {
                 ndi::FrameType::Video => {}
@@ -84,71 +85,45 @@ impl FeedSourceImpl for NDIFeedSource {
                 _ => continue,
             }
 
-            let data = data.context("Failed to get video data from capture")?;
-            let width = data.width() as usize;
-            let height = data.height() as usize;
-            let pts = data.timecode();
+            let video_data = std::mem::replace(&mut self.ndi_video_data, None)
+                .context("Failed to get video data from capture")?;
 
-            let line_stride = data.line_stride_in_bytes().unwrap() as usize;
-            let raw_frame: Box<[u8]> =
-                unsafe { std::slice::from_raw_parts(data.p_data(), height * line_stride) }.into();
+            let width = video_data.width() as usize;
+            let height = video_data.height() as usize;
+            let timecode = video_data.timecode();
 
-            let mut color =
-                FeedColorType::try_from(data.four_cc()).context("Unsupported color format {}")?;
+            let line_stride = video_data.line_stride_in_bytes().unwrap() as usize;
+            let raw_frame =
+                unsafe { std::slice::from_raw_parts(video_data.p_data(), height * line_stride) };
 
-            let data = match color {
-                // FeedColorType::RGBA => raw_frame,
-                FeedColorType::UYVY => {
-                    let mut yuv = vec![0u8; 3 * (width * height) / 2].into_boxed_slice();
-                    let w: i32 = width as _;
-                    let dest_steps = [w, w / 2, w / 2];
-                    let dim = width * height;
-                    unsafe {
-                        let y = yuv.as_mut_ptr();
-                        let u = y.add(dim);
-                        let v = u.add(dim >> 2);
-                        let dest_slices = [y, u, v];
+            let pix_fmt = VideoFramePixelFormat::try_from(video_data.four_cc())
+                .context("Unsupported color format {}")?;
+            let data = Bytes::from(raw_frame);
 
-                        let rv = ffi::ippi::ippiCbYCr422ToYCbCr420_8u_C2P3R(
-                            raw_frame.as_ptr(),
-                            line_stride as _,
-                            dest_slices.as_ptr() as _,
-                            dest_steps.as_ptr() as _,
-                            ffi::ippi::IppiSize {
-                                width: width as _,
-                                height: height as _,
-                            },
-                        );
-
-                        if rv != ffi::ippi::ippStsNoErr as i32 {
-                            bail!("Received error from IPP: {}", rv);
-                        }
-                    }
-                    color = FeedColorType::I420;
-                    yuv
-                }
-                _ => bail!("Unsupported source color format {color:?}"),
-            };
-
-            return Ok(Some(FeedFrame {
-                color,
+            return Ok(Some(VideoFrameBuffer {
+                pix_fmt,
                 width,
                 height,
                 data,
-                pts,
+                timecode,
+                framerate: VideoFramerate::new(
+                    video_data.frame_rate_n(),
+                    video_data.frame_rate_d(),
+                ),
+                line_stride,
             }));
         }
         return Ok(None);
     }
 }
 
-impl TryFrom<ndi::FourCCVideoType> for FeedColorType {
+impl TryFrom<ndi::FourCCVideoType> for VideoFramePixelFormat {
     type Error = anyhow::Error;
 
     fn try_from(value: ndi::FourCCVideoType) -> Result<Self> {
         match value {
-            ndi::FourCCVideoType::BGRA | ndi::FourCCVideoType::BGRX => Ok(Self::BGRA),
-            ndi::FourCCVideoType::RGBA | ndi::FourCCVideoType::RGBX => Ok(Self::RGBA),
+            // ndi::FourCCVideoType::BGRA | ndi::FourCCVideoType::BGRX => Ok(Self::BGRA),
+            // ndi::FourCCVideoType::RGBA | ndi::FourCCVideoType::RGBX => Ok(Self::RGBA),
             ndi::FourCCVideoType::UYVY => Ok(Self::UYVY),
             ndi::FourCCVideoType::I420 => Ok(Self::I420),
             format => bail!("Unsupported video format {:?}", format),
