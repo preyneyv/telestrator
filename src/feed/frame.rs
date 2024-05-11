@@ -2,6 +2,8 @@ use crate::ffi;
 use anyhow::Result;
 use bytes::Bytes;
 
+pub type Resolution = (u32, u32);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum VideoFramePixelFormat {
     I420,
@@ -25,15 +27,23 @@ impl VideoFramerate {
     }
 }
 
+/// Represent the timecode of a video frame. Internally stores timecodes as
+/// microseconds (higher resolutions are lost).
 #[derive(Clone)]
-pub struct VideoFrameBuffer {
-    pub pix_fmt: VideoFramePixelFormat,
-    pub width: usize,
-    pub height: usize,
-    pub timecode: i64,
-    pub framerate: VideoFramerate,
-    pub line_stride: usize,
-    pub data: Bytes,
+pub struct VideoTimestamp(u64);
+impl VideoTimestamp {
+    pub fn from_micros(micros: u64) -> Self {
+        Self(micros)
+    }
+    pub fn from_millis(millis: u64) -> Self {
+        Self(millis * 1000)
+    }
+    pub fn to_micros(&self) -> u64 {
+        self.0
+    }
+    pub fn to_millis(&self) -> u64 {
+        self.0 / 1000
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -42,7 +52,23 @@ pub enum ColorConversionError {
     IPPError(i32),
 }
 
+#[derive(Clone)]
+pub struct VideoFrameBuffer {
+    pub pix_fmt: VideoFramePixelFormat,
+    pub width: usize,
+    pub height: usize,
+
+    /// timestamp in milliseconds
+    pub timestamp: VideoTimestamp,
+    pub framerate: VideoFramerate,
+    pub line_stride: usize,
+    pub data: Bytes,
+}
 impl VideoFrameBuffer {
+    pub fn resolution(&self) -> Resolution {
+        (self.width as u32, self.height as u32)
+    }
+
     /// Convert the provided frame to I420.
     pub fn to_i420(&self) -> Result<VideoFrameBuffer> {
         use VideoFramePixelFormat::*;
@@ -94,5 +120,19 @@ impl VideoFrameBuffer {
             data: new_data,
             ..self.clone()
         });
+    }
+
+    // TODO: This is ugly. Make separate structs for each color type.
+    pub fn yuv_slices(&self) -> (&[u8], &[u8], &[u8]) {
+        debug_assert!(self.pix_fmt == VideoFramePixelFormat::I420);
+        let width = self.width;
+        let height = self.height;
+        let dim = width * height;
+
+        let y = &self.data[0..dim];
+        let u = &self.data[dim..dim + dim / 4];
+        let v = &self.data[dim + dim / 4..];
+
+        (y, u, v)
     }
 }

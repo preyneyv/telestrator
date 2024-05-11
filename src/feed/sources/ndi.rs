@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use ndi::VideoData;
 
-use crate::feed::frame::{VideoFrameBuffer, VideoFramePixelFormat, VideoFramerate};
+use crate::feed::frame::{VideoFrameBuffer, VideoFramePixelFormat, VideoFramerate, VideoTimestamp};
 
 use super::{FeedSource, FeedSourceConfig, FeedSourceConfigImpl, FeedSourceImpl};
 
@@ -90,11 +90,16 @@ impl FeedSourceImpl for NDIFeedSource {
 
             let width = video_data.width() as usize;
             let height = video_data.height() as usize;
-            let timecode = video_data.timecode();
+            println!("ndi {}", video_data.timecode());
+            let timestamp =
+                VideoTimestamp::from_micros((video_data.timestamp().unwrap_or(0) / 10) as u64);
 
             let line_stride = video_data.line_stride_in_bytes().unwrap() as usize;
+
+            // TODO: This copy sucks but we get memory errors if this copy is allowed to happen.
             let raw_frame =
-                unsafe { std::slice::from_raw_parts(video_data.p_data(), height * line_stride) };
+                unsafe { std::slice::from_raw_parts(video_data.p_data(), height * line_stride) }
+                    .to_vec();
 
             let pix_fmt = VideoFramePixelFormat::try_from(video_data.four_cc())
                 .context("Unsupported color format {}")?;
@@ -105,7 +110,7 @@ impl FeedSourceImpl for NDIFeedSource {
                 width,
                 height,
                 data,
-                timecode,
+                timestamp,
                 framerate: VideoFramerate::new(
                     video_data.frame_rate_n(),
                     video_data.frame_rate_d(),

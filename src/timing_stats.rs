@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-const TIMING_ACCUMULATOR_SIZE: usize = 10;
+const TIMING_ACCUMULATOR_SIZE: usize = 120;
 
 pub struct TimingStats {
     last_frame: Option<Instant>,

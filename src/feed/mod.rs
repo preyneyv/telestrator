@@ -14,7 +14,7 @@ pub async fn main(
     feed_result_tx: broadcast::Sender<FeedResultMessage>,
 ) -> Result<()> {
     tokio::task::spawn_blocking(move || {
-        let mut manager = FeedManager::new(config, feed_control_rx, feed_result_tx);
+        let mut manager = FeedManager::new(config, feed_control_rx, feed_result_tx)?;
         manager.run_forever()
     })
     .await??;

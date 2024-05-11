@@ -18,12 +18,4 @@ pub async fn main(
         })
         .await?;
     Ok(())
-    // loop {
-
-    //     feed_control_tx
-    //         .send(FeedControlMessage::ClientLeft {
-    //             client_id: client_id.clone(),
-    //         })
-    //         .await?;
-    // }
 }

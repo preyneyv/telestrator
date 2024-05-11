@@ -8,7 +8,8 @@ use crate::feed::frame::VideoFrameBuffer;
 
 #[enum_delegate::register]
 pub trait FeedEncoderImpl {
-    fn encode(&mut self, frame: &VideoFrameBuffer, force_keyframe: bool) -> Result<Bytes>;
+    fn encode(&mut self, frame: &VideoFrameBuffer, flags: EncoderFrameFlags) -> Result<Bytes>;
+    fn set_rate(&mut self, rate: RateParameters) -> Result<()>;
 }
 
 #[enum_delegate::implement(FeedEncoderImpl)]
@@ -18,10 +19,21 @@ pub enum FeedEncoder {
 
 #[enum_delegate::register]
 pub trait FeedEncoderConfigImpl {
-    fn build(&self) -> Result<FeedEncoder>;
+    fn build(&self, rate: RateParameters) -> Result<FeedEncoder>;
 }
 
 #[enum_delegate::implement(FeedEncoderConfigImpl)]
 pub enum FeedEncoderConfig {
     OpenH264(OpenH264FeedEncoderConfig),
+}
+
+#[derive(Default, Debug)]
+pub struct EncoderFrameFlags {
+    pub force_keyframe: bool,
+}
+
+#[derive(Debug)]
+pub struct RateParameters {
+    pub target_bitrate: u32,
+    pub max_fps: f32,
 }

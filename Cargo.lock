@@ -1402,6 +1402,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
 
 [[package]]
+name = "openh264"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cea5160127089cf97aad654dd93f49f8291c0f2109c377d74f25804aa52c4ec7"
+dependencies = [
+ "openh264-sys2",
+]
+
+[[package]]
 name = "openh264-sys2"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2177,6 +2186,7 @@ dependencies = [
  "enum_delegate",
  "minifb",
  "ndi",
+ "openh264",
  "openh264-sys2",
  "serde",
  "serde_json",

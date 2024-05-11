@@ -7,15 +7,13 @@ use tokio::sync::{broadcast, mpsc};
 use crate::timing_stats::TimingStats;
 
 use super::{
-    encoders::{self, FeedEncoderConfig, FeedEncoderConfigImpl, FeedEncoderImpl},
-    sources::{self, FeedSourceConfig, FeedSourceConfigImpl, FeedSourceImpl},
+    encoders::{
+        self, EncoderFrameFlags, FeedEncoder, FeedEncoderConfig, FeedEncoderConfigImpl,
+        FeedEncoderImpl, RateParameters,
+    },
+    frame::Resolution,
+    sources::{self, FeedSource, FeedSourceConfig, FeedSourceConfigImpl, FeedSourceImpl},
 };
-
-#[derive(Debug)]
-pub struct FeedResizeResolution {
-    width: u32,
-    height: u32,
-}
 
 #[derive(Default)]
 pub struct FeedConfigBuilder {
@@ -35,12 +33,12 @@ pub struct FeedConfigBuilder {
     /// The encoding pipeline is allowed to dip below this for performance
     /// reasons. However, bandwidth-related adjustments will not go
     /// below min_fps.
-    min_fps: Option<u32>,
+    min_fps: Option<f32>,
     /// The encoding pipeline will not exceed this FPS limit.
-    max_fps: Option<u32>,
+    max_fps: Option<f32>,
 
     /// If specified, frames will be resized to this if they are larger.
-    resolution: Option<FeedResizeResolution>,
+    resolution: Option<Resolution>,
 }
 
 impl FeedConfigBuilder {
@@ -67,13 +65,13 @@ impl FeedConfigBuilder {
         self
     }
 
-    pub fn fps(mut self, min_fps: u32, max_fps: u32) -> Self {
+    pub fn fps(mut self, min_fps: f32, max_fps: f32) -> Self {
         self.min_fps = Some(min_fps);
         self.max_fps = Some(max_fps);
         self
     }
 
-    pub fn resolution(mut self, resolution: FeedResizeResolution) -> Self {
+    pub fn resolution(mut self, resolution: Resolution) -> Self {
         self.resolution = Some(resolution);
         self
     }
@@ -94,8 +92,8 @@ impl FeedConfigBuilder {
         let start_bitrate = self.start_bitrate.unwrap_or(6000);
         let max_bitrate = self.max_bitrate.unwrap_or(20_000);
 
-        let min_fps = self.min_fps.unwrap_or(1000);
-        let max_fps = self.max_fps.unwrap_or(6000);
+        let min_fps = self.min_fps.unwrap_or(0.);
+        let max_fps = self.max_fps.unwrap_or(60.);
         let resolution = self.resolution;
 
         Ok(FeedConfig {
@@ -122,10 +120,10 @@ pub struct FeedConfig {
     start_bitrate: u32,
     max_bitrate: u32,
 
-    min_fps: u32,
-    max_fps: u32,
+    min_fps: f32,
+    max_fps: f32,
 
-    resolution: Option<FeedResizeResolution>,
+    resolution: Option<Resolution>,
 }
 
 #[derive(Debug)]
@@ -144,11 +142,16 @@ pub enum FeedResultMessage {
 pub struct FeedManager {
     config: FeedConfig,
 
+    source: FeedSource,
+    encoder: FeedEncoder,
+
     feed_control_rx: mpsc::Receiver<FeedControlMessage>,
     feed_result_tx: broadcast::Sender<FeedResultMessage>,
 
     client_bitrates: HashMap<String, u32>,
+
     target_bitrate: u32,
+    max_fps: f32,
     force_keyframe: bool,
 }
 
@@ -157,46 +160,57 @@ impl FeedManager {
         config: FeedConfig,
         feed_control_rx: mpsc::Receiver<FeedControlMessage>,
         feed_result_tx: broadcast::Sender<FeedResultMessage>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let max_fps = config.max_fps;
+        let target_bitrate = config.start_bitrate;
+
+        let source = config.source.build()?;
+        let encoder = config.encoder.build(RateParameters {
+            max_fps,
+            target_bitrate,
+        })?;
+
+        Ok(Self {
             config,
+
+            source,
+            encoder,
 
             feed_control_rx,
             feed_result_tx,
 
             client_bitrates: HashMap::new(),
-            target_bitrate: 0,
+            target_bitrate,
+            max_fps,
             force_keyframe: false,
-        }
+        })
     }
 
     pub fn run_forever(&mut self) -> Result<()> {
         let mut stats = TimingStats::new("feed".into());
 
-        let mut source = self.config.source.build()?;
-        let mut encoder = self.config.encoder.build()?;
-
         loop {
-            self.process_queued_control_messages();
+            self.process_queued_control_messages()?;
 
-            if self.client_bitrates.len() == 0 {
-                // There's nothing to do, since we don't have any clients.
-                // Just block until the next message and try again.
-                self.block_until_next_message();
-                continue;
-            }
+            // if self.client_bitrates.len() == 0 {
+            //     // There's nothing to do, since we don't have any clients.
+            //     // Just block until the next message and try again.
+            //     self.block_until_next_message()?;
+            //     continue;
+            // }
 
             // TODO: get_frame() could be block while a keyframe request comes
             // in. If so, the keyframe gets deferred for a really long time.
-            let Some(frame) = source.get_frame()? else {
+            let Some(frame) = self.source.get_frame()? else {
                 continue;
             };
 
             stats.tick();
 
             let force_keyframe = std::mem::replace(&mut self.force_keyframe, false);
-            let data = encoder
-                .encode(&frame, force_keyframe)
+            let data = self
+                .encoder
+                .encode(&frame, EncoderFrameFlags { force_keyframe })
                 .context("failed to encode frame")?;
 
             self.feed_result_tx
@@ -206,20 +220,22 @@ impl FeedManager {
     }
 
     /// Parse all messages in the feed control queue.
-    fn process_queued_control_messages(&mut self) {
+    fn process_queued_control_messages(&mut self) -> Result<()> {
         while let Ok(message) = self.feed_control_rx.try_recv() {
-            self.process_control_message(message);
+            self.process_control_message(message)?;
         }
+        Ok(())
     }
 
     /// Block until a message is received on the feed control queue.
-    fn block_until_next_message(&mut self) {
+    fn block_until_next_message(&mut self) -> Result<()> {
         if let Some(message) = self.feed_control_rx.blocking_recv() {
-            self.process_control_message(message);
+            self.process_control_message(message)?;
         }
+        Ok(())
     }
 
-    fn process_control_message(&mut self, message: FeedControlMessage) {
+    fn process_control_message(&mut self, message: FeedControlMessage) -> Result<()> {
         println!(">> FeedControl {:?}", message);
         match message {
             FeedControlMessage::ClientJoined { client_id } => {
@@ -228,26 +244,29 @@ impl FeedManager {
                     std::cmp::min(self.target_bitrate, self.config.start_bitrate),
                 );
                 // send a keyframe for the new client
-                self.force_keyframe = true
+                self.compute_target_bitrate()?;
+                self.force_keyframe = true;
             }
             FeedControlMessage::BandwidthEstimate { client_id, bitrate } => {
                 self.client_bitrates.insert(client_id, bitrate);
-                self.compute_target_bitrate();
+                self.compute_target_bitrate()?;
             }
             FeedControlMessage::ClientLeft { client_id } => {
                 self.client_bitrates.remove(&client_id);
-                self.compute_target_bitrate();
+                self.compute_target_bitrate()?;
             }
             FeedControlMessage::RequestKeyframe => {
                 self.force_keyframe = true;
             }
         }
+
+        Ok(())
     }
 
     /// Compute the target bitrate as the minimum of all connected client
     /// bitrates. If there are no clients, the target bitrate is set to
     /// `config.start_bitrate`.
-    fn compute_target_bitrate(&mut self) {
+    fn compute_target_bitrate(&mut self) -> Result<()> {
         let min_client_bitrate = self
             .client_bitrates
             .values()
@@ -257,5 +276,16 @@ impl FeedManager {
 
         let clamped = min_client_bitrate.clamp(self.config.min_bitrate, self.config.max_bitrate);
         self.target_bitrate = clamped;
+
+        let rate = RateParameters {
+            target_bitrate: self.target_bitrate,
+            max_fps: self.max_fps,
+        };
+        println!("feedmanager new rate {:?}", rate);
+
+        self.encoder
+            .set_rate(rate)
+            .context("unable to update rate parameters")?;
+        Ok(())
     }
 }
