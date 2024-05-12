@@ -90,7 +90,7 @@ impl FeedSourceImpl for NDIFeedSource {
 
             let width = video_data.width() as usize;
             let height = video_data.height() as usize;
-            println!("ndi {}", video_data.timecode());
+
             let timestamp =
                 VideoTimestamp::from_micros((video_data.timestamp().unwrap_or(0) / 10) as u64);
 

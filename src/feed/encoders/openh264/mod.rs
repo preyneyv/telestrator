@@ -110,8 +110,8 @@ pub struct OpenH264FeedEncoderConfig {
 impl Default for OpenH264FeedEncoderConfig {
     fn default() -> Self {
         Self {
-            keyframe_interval: 250,
-            debug: true,
+            keyframe_interval: 600,
+            debug: false,
         }
     }
 }
@@ -156,7 +156,7 @@ impl OpenH264FeedEncoder {
         // TODO: Fill with real info.
         params.iPicWidth = width as _;
         params.iPicHeight = height as _;
-        params.iTargetBitrate = bitrate as _;
+        params.iTargetBitrate = (bitrate * 1000) as _;
         params.fMaxFrameRate = framerate;
 
         params.iUsageType = SCREEN_CONTENT_REAL_TIME;
@@ -219,7 +219,7 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
         }
 
         let frame = frame.to_i420()?;
-        let stride = frame.line_stride as i32;
+        let stride = frame.width as i32;
         let data = frame.yuv_slices();
         let source = SSourcePicture {
             iPicWidth: frame.width as _,
@@ -235,8 +235,6 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
             ],
         };
 
-        println!("{}", source.uiTimeStamp);
-
         if flags.force_keyframe {
             unsafe { self.encoder.force_intra_frame(true)? }
         }
@@ -249,13 +247,23 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
                 .context("encode_frame failed")?
         };
 
-        // println!("encode s")
+        let mut bitstream = Vec::with_capacity(info.iFrameSizeInBytes as _);
+        // println!("{} {}", info.eFrameType, info.iFrameSizeInBytes);
+        for l in 0..(info.iLayerNum as usize) {
+            let layer = &info.sLayerInfo[l];
+            let mut layer_size = 0;
+            for n in 0..(layer.iNalCount as usize) {
+                layer_size += unsafe { *layer.pNalLengthInByte.add(n) };
+            }
+            bitstream.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(layer.pBsBuf, layer_size as _)
+            });
+        }
 
-        Ok(Bytes::from(Vec::<u8>::new()))
+        Ok(Bytes::from(bitstream))
     }
 
     fn set_rate(&mut self, mut rate: RateParameters) -> Result<()> {
-        return Ok(());
         if self.previous_resolution.is_none() {
             // Encoder is not initialized yet.
             self.previous_rate = rate;
@@ -269,7 +277,7 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
         }
 
         let mut bitrate = SBitrateInfo {
-            iBitrate: rate.target_bitrate as _,
+            iBitrate: (rate.target_bitrate * 1000) as _,
             iLayer: SPATIAL_LAYER_ALL,
         };
 

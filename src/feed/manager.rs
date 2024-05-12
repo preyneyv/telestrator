@@ -1,4 +1,8 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    thread,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -148,11 +152,13 @@ pub struct FeedManager {
     feed_control_rx: mpsc::Receiver<FeedControlMessage>,
     feed_result_tx: broadcast::Sender<FeedResultMessage>,
 
-    client_bitrates: HashMap<String, u32>,
+    force_keyframe: bool,
 
+    client_bitrates: HashMap<String, u32>,
     target_bitrate: u32,
     max_fps: f32,
-    force_keyframe: bool,
+
+    last_frame_time: Instant,
 }
 
 impl FeedManager {
@@ -179,10 +185,13 @@ impl FeedManager {
             feed_control_rx,
             feed_result_tx,
 
+            force_keyframe: false,
+
             client_bitrates: HashMap::new(),
             target_bitrate,
             max_fps,
-            force_keyframe: false,
+
+            last_frame_time: Instant::now(),
         })
     }
 
@@ -192,12 +201,12 @@ impl FeedManager {
         loop {
             self.process_queued_control_messages()?;
 
-            // if self.client_bitrates.len() == 0 {
-            //     // There's nothing to do, since we don't have any clients.
-            //     // Just block until the next message and try again.
-            //     self.block_until_next_message()?;
-            //     continue;
-            // }
+            if self.client_bitrates.len() == 0 {
+                // There's nothing to do, since we don't have any clients.
+                // Just block until the next message and try again.
+                self.block_until_next_message()?;
+                continue;
+            }
 
             // TODO: get_frame() could be block while a keyframe request comes
             // in. If so, the keyframe gets deferred for a really long time.
@@ -208,15 +217,29 @@ impl FeedManager {
             stats.tick();
 
             let force_keyframe = std::mem::replace(&mut self.force_keyframe, false);
+            stats.start("encode");
             let data = self
                 .encoder
                 .encode(&frame, EncoderFrameFlags { force_keyframe })
                 .context("failed to encode frame")?;
+            stats.end("encode");
+
+            stats.track("bitrate", data.len() as _, " bits/frame");
+
+            self.rate_limit();
 
             self.feed_result_tx
                 .send(FeedResultMessage::EncodedBitstream(data))
                 .ok();
         }
+    }
+
+    /// Sleep to meet the target FPS.
+    fn rate_limit(&mut self) {
+        let frame_length = Duration::from_secs_f32(1. / self.max_fps);
+        let expected_deadline = self.last_frame_time + frame_length;
+        thread::sleep(expected_deadline.duration_since(Instant::now()));
+        self.last_frame_time = Instant::now();
     }
 
     /// Parse all messages in the feed control queue.

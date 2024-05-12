@@ -1,3 +1,11 @@
+/// Differences:
+/// -[ ] retransmission (rtx)
+/// -[ ] reduce keyframe count (use fir and pli)
+/// -[ ] bonus points: use bwe to pick bitrate
+/// -[ ] set duration accurately
+///
+/// alternative
+/// -[ ] disable frameskip on encoder (not recommended, blows up max bitrate )
 use std::{convert::Infallible, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
 
 use anyhow::Result;
@@ -22,7 +30,7 @@ use webrtc::{
         configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
         sdp::session_description::RTCSessionDescription,
     },
-    rtp_transceiver::rtp_codec::RTCRtpCodecCapability,
+    rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, RTCPFeedback, TYPE_RTCP_FB_CCM},
     track::track_local::{track_local_static_sample::TrackLocalStaticSample, TrackLocal},
 };
 
@@ -114,6 +122,13 @@ async fn webrtc_worker(
     let video_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_H264.to_owned(),
+            clock_rate: 90000,
+            channels: 0,
+            // sdp_fmtp_line: "".into(),
+            // rtcp_feedback: vec![RTCPFeedback {
+            //     typ: TYPE_RTCP_FB_CCM.into(),
+            //     parameter: "fir".into(),
+            // }],
             ..Default::default()
         },
         "video".to_owned(),
@@ -156,7 +171,8 @@ async fn webrtc_worker(
             video_track
                 .write_sample(&Sample {
                     data,
-                    duration: Duration::from_millis(1),
+                    duration: Duration::from_secs_f32(1.0 / 60.0),
+
                     ..Default::default()
                 })
                 .await?;
