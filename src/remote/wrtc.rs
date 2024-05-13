@@ -30,7 +30,14 @@ use webrtc::{
         configuration::RTCConfiguration, peer_connection_state::RTCPeerConnectionState,
         sdp::session_description::RTCSessionDescription,
     },
-    rtp_transceiver::{rtp_codec::RTCRtpCodecCapability, RTCPFeedback, TYPE_RTCP_FB_CCM},
+    rtcp::payload_feedbacks::{
+        full_intra_request::FullIntraRequest, picture_loss_indication::PictureLossIndication,
+        receiver_estimated_maximum_bitrate::ReceiverEstimatedMaximumBitrate,
+    },
+    rtp_transceiver::{
+        rtp_codec::{RTCRtpCodecCapability, RTCRtpCodecParameters, RTPCodecType},
+        RTCPFeedback,
+    },
     track::track_local::{track_local_static_sample::TrackLocalStaticSample, TrackLocal},
 };
 
@@ -102,6 +109,39 @@ async fn webrtc_worker(
     // TODO: see what can be moved out.
     let mut m = MediaEngine::default();
     m.register_default_codecs().unwrap();
+    m.register_codec(
+        RTCRtpCodecParameters {
+            capability: RTCRtpCodecCapability {
+                mime_type: MIME_TYPE_H264.to_owned(),
+                clock_rate: 90000,
+                channels: 0,
+                sdp_fmtp_line:
+                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f"
+                        .to_owned(),
+                rtcp_feedback: vec![
+                    RTCPFeedback {
+                        typ: "goog-remb".to_owned(),
+                        parameter: "".to_owned(),
+                    },
+                    RTCPFeedback {
+                        typ: "ccm".to_owned(),
+                        parameter: "fir".to_owned(),
+                    },
+                    RTCPFeedback {
+                        typ: "nack".to_owned(),
+                        parameter: "".to_owned(),
+                    },
+                    RTCPFeedback {
+                        typ: "nack".to_owned(),
+                        parameter: "pli".to_owned(),
+                    },
+                ],
+            },
+            payload_type: 102,
+            ..Default::default()
+        },
+        RTPCodecType::Video,
+    )?;
 
     let mut registry = Registry::new();
     registry = register_default_interceptors(registry, &mut m)?;
@@ -122,13 +162,6 @@ async fn webrtc_worker(
     let video_track = Arc::new(TrackLocalStaticSample::new(
         RTCRtpCodecCapability {
             mime_type: MIME_TYPE_H264.to_owned(),
-            clock_rate: 90000,
-            channels: 0,
-            // sdp_fmtp_line: "".into(),
-            // rtcp_feedback: vec![RTCPFeedback {
-            //     typ: TYPE_RTCP_FB_CCM.into(),
-            //     parameter: "fir".into(),
-            // }],
             ..Default::default()
         },
         "video".to_owned(),
@@ -140,9 +173,32 @@ async fn webrtc_worker(
         .await?;
 
     // Read incoming RTCP
+    let rtcp_feed_control_tx = feed_control_tx.clone();
+    let rtcp_client_id = client_id.clone();
     tokio::spawn(async move {
         let mut rtcp_buf = vec![0u8; 1500];
-        while let Ok((_, _)) = rtp_sender.read(&mut rtcp_buf).await {}
+        while let Ok((packets, _)) = rtp_sender.read(&mut rtcp_buf).await {
+            packets.iter().for_each(|pkt| {
+                let any_pkt = pkt.as_any();
+                if let Some(_) = any_pkt.downcast_ref::<PictureLossIndication>() {
+                    rtcp_feed_control_tx
+                        .try_send(FeedControlMessage::RequestKeyframe)
+                        .ok();
+                } else if let Some(_) = any_pkt.downcast_ref::<FullIntraRequest>() {
+                    rtcp_feed_control_tx
+                        .try_send(FeedControlMessage::RequestKeyframe)
+                        .ok();
+                } else if let Some(pkt) = any_pkt.downcast_ref::<ReceiverEstimatedMaximumBitrate>()
+                {
+                    rtcp_feed_control_tx
+                        .try_send(FeedControlMessage::BandwidthEstimate {
+                            client_id: rtcp_client_id.clone(),
+                            bitrate: 8 * (pkt.bitrate as u32) / 1000,
+                        })
+                        .ok();
+                }
+            });
+        }
         Result::<()>::Ok(())
     });
 
@@ -219,9 +275,24 @@ async fn webrtc_worker(
         .recv()
         .await;
 
-    let Some(local_description) = peer_connection.local_description().await else {
+    let Some(mut local_description) = peer_connection.local_description().await else {
         return Ok(());
     };
+    local_description.sdp = local_description
+        .sdp
+        .split("\r\n")
+        .map(|line| {
+            if line.starts_with("a=fmtp:") {
+                line.to_owned()
+            + ";x-google-max-bitrate=20000;x-google-min-bitrate=0;x-google-start-bitrate=6000"
+            } else if line.starts_with("a=mid:") {
+                line.to_owned() + "\r\nb=AS:20000"
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<String>>()
+        .join("\r\n");
     offer.resp.send(Some(local_description)).unwrap();
 
     tokio::select! {

@@ -20,7 +20,7 @@ use o264_sys::{
     SFrameBSInfo, SSourcePicture, API, ENCODER_OPTION, ENCODER_OPTION_BITRATE,
     ENCODER_OPTION_DATAFORMAT, ENCODER_OPTION_FRAME_RATE, ENCODER_OPTION_SVC_ENCODE_PARAM_EXT,
     ENCODER_OPTION_TRACE_LEVEL, RC_BITRATE_MODE, SCREEN_CONTENT_REAL_TIME, SM_FIXEDSLCNUM_SLICE,
-    SPATIAL_LAYER_ALL, SPS_LISTING, UNSPECIFIED_BIT_RATE, WELS_LOG_DETAIL,
+    SPATIAL_LAYER_ALL, UNSPECIFIED_BIT_RATE, WELS_LOG_DETAIL,
 };
 use openh264 as o264;
 use openh264_sys2 as o264_sys;
@@ -44,6 +44,7 @@ impl OpenH264ErrorCode for os::raw::c_int {
 
 /// Wrapper around VTable methods for ISVCEncoderVtbl.
 #[rustfmt::skip]
+#[allow(dead_code)]
 pub struct OpenH264InnerEncoder {
     pub api: OpenH264API,
     ptr: *mut *const ISVCEncoderVtbl,
@@ -60,6 +61,7 @@ pub struct OpenH264InnerEncoder {
 }
 
 #[rustfmt::skip]
+#[allow(dead_code)]
 impl OpenH264InnerEncoder {
     pub fn new(api: OpenH264API) -> Result<Self> {
         let mut ptr = null::<ISVCEncoderVtbl>() as *mut *const ISVCEncoderVtbl;
@@ -110,7 +112,7 @@ pub struct OpenH264FeedEncoderConfig {
 impl Default for OpenH264FeedEncoderConfig {
     fn default() -> Self {
         Self {
-            keyframe_interval: 600,
+            keyframe_interval: 0,
             debug: false,
         }
     }
@@ -153,7 +155,6 @@ impl OpenH264FeedEncoder {
         let mut params = SEncParamExt::default();
         unsafe { self.encoder.get_default_params(&mut params)? };
 
-        // TODO: Fill with real info.
         params.iPicWidth = width as _;
         params.iPicHeight = height as _;
         params.iTargetBitrate = (bitrate * 1000) as _;
@@ -167,7 +168,7 @@ impl OpenH264FeedEncoder {
         params.uiMaxNalSize = 0;
         params.iMultipleThreadIdc = 3;
 
-        // not supported SCREEN_CONTENT_REAL_TIME
+        // not supported by SCREEN_CONTENT_REAL_TIME
         params.bEnableAdaptiveQuant = false;
         // params.eSpsPpsIdStrategy = SPS_LISTING;
         params.bEnableBackgroundDetection = false;
@@ -248,7 +249,6 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
         };
 
         let mut bitstream = Vec::with_capacity(info.iFrameSizeInBytes as _);
-        // println!("{} {}", info.eFrameType, info.iFrameSizeInBytes);
         for l in 0..(info.iLayerNum as usize) {
             let layer = &info.sLayerInfo[l];
             let mut layer_size = 0;

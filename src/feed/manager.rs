@@ -34,10 +34,6 @@ pub struct FeedConfigBuilder {
     /// Maximum bitrate due to bandwidth-related adjustments. (kbps)
     max_bitrate: Option<u32>,
 
-    /// The encoding pipeline is allowed to dip below this for performance
-    /// reasons. However, bandwidth-related adjustments will not go
-    /// below min_fps.
-    min_fps: Option<f32>,
     /// The encoding pipeline will not exceed this FPS limit.
     max_fps: Option<f32>,
 
@@ -69,8 +65,7 @@ impl FeedConfigBuilder {
         self
     }
 
-    pub fn fps(mut self, min_fps: f32, max_fps: f32) -> Self {
-        self.min_fps = Some(min_fps);
+    pub fn fps(mut self, max_fps: f32) -> Self {
         self.max_fps = Some(max_fps);
         self
     }
@@ -93,10 +88,9 @@ impl FeedConfigBuilder {
         };
 
         let min_bitrate = self.min_bitrate.unwrap_or(1000);
-        let start_bitrate = self.start_bitrate.unwrap_or(6000);
-        let max_bitrate = self.max_bitrate.unwrap_or(20_000);
+        let start_bitrate = self.start_bitrate.unwrap_or(2000);
+        let max_bitrate = self.max_bitrate.unwrap_or(0);
 
-        let min_fps = self.min_fps.unwrap_or(0.);
         let max_fps = self.max_fps.unwrap_or(60.);
         let resolution = self.resolution;
 
@@ -109,7 +103,6 @@ impl FeedConfigBuilder {
             max_bitrate,
 
             max_fps,
-            min_fps,
 
             resolution,
         })
@@ -124,7 +117,6 @@ pub struct FeedConfig {
     start_bitrate: u32,
     max_bitrate: u32,
 
-    min_fps: f32,
     max_fps: f32,
 
     resolution: Option<Resolution>,
@@ -259,7 +251,6 @@ impl FeedManager {
     }
 
     fn process_control_message(&mut self, message: FeedControlMessage) -> Result<()> {
-        println!(">> FeedControl {:?}", message);
         match message {
             FeedControlMessage::ClientJoined { client_id } => {
                 self.client_bitrates.insert(
@@ -268,7 +259,6 @@ impl FeedManager {
                 );
                 // send a keyframe for the new client
                 self.compute_target_bitrate()?;
-                self.force_keyframe = true;
             }
             FeedControlMessage::BandwidthEstimate { client_id, bitrate } => {
                 self.client_bitrates.insert(client_id, bitrate);
@@ -297,14 +287,17 @@ impl FeedManager {
             .unwrap_or(&self.config.start_bitrate)
             .to_owned();
 
-        let clamped = min_client_bitrate.clamp(self.config.min_bitrate, self.config.max_bitrate);
-        self.target_bitrate = clamped;
+        self.target_bitrate = match (self.config.min_bitrate, self.config.max_bitrate) {
+            (0, 0) => min_client_bitrate,
+            (0, max) => min_client_bitrate.min(max),
+            (min, 0) => min_client_bitrate.max(min),
+            (min, max) => min_client_bitrate.clamp(min, max),
+        };
 
         let rate = RateParameters {
             target_bitrate: self.target_bitrate,
             max_fps: self.max_fps,
         };
-        println!("feedmanager new rate {:?}", rate);
 
         self.encoder
             .set_rate(rate)
