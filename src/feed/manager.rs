@@ -224,7 +224,7 @@ impl FeedManager {
                 .context("failed to encode frame")?;
             stats.end("encode");
 
-            stats.track("bitrate", data.len() as _, " bits/frame");
+            stats.track("bitrate", (8 * data.len()) as _, " bits/frame");
 
             self.rate_limit();
 

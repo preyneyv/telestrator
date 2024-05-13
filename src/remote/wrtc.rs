@@ -6,7 +6,7 @@
 ///
 /// alternative
 /// -[ ] disable frameskip on encoder (not recommended, blows up max bitrate )
-use std::{convert::Infallible, net::SocketAddr, str::FromStr, sync::Arc, time::Duration};
+use std::{convert::Infallible, net::SocketAddr, str::FromStr, sync::Arc, time::Instant};
 
 use anyhow::Result;
 use static_dir::static_dir;
@@ -160,6 +160,8 @@ async fn webrtc_worker(
             })
             .await?;
 
+        let mut last_write = Instant::now();
+
         loop {
             let data = match feed_result_rx.recv().await {
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -168,14 +170,16 @@ async fn webrtc_worker(
                 Ok(FeedResultMessage::EncodedBitstream(data)) => data,
             };
 
+            let now = Instant::now();
             video_track
                 .write_sample(&Sample {
                     data,
-                    duration: Duration::from_secs_f32(1.0 / 60.0),
-
+                    duration: now - last_write,
                     ..Default::default()
                 })
                 .await?;
+
+            last_write = now;
         }
 
         video_done_tx.try_send(()).ok();
