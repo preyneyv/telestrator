@@ -41,7 +41,10 @@ use webrtc::{
     track::track_local::{track_local_static_sample::TrackLocalStaticSample, TrackLocal},
 };
 
-use crate::feed::manager::{FeedControlMessage, FeedResultMessage};
+use crate::{
+    feed::manager::{FeedControlMessage, FeedResultMessage},
+    remote::extensions::playout_delay::PlayoutDelayExtension,
+};
 
 #[derive(Debug)]
 pub struct WrtcOffer {
@@ -228,6 +231,8 @@ async fn webrtc_worker(
 
             let now = Instant::now();
             video_track
+                .sample_writer()
+                .with_extension(PlayoutDelayExtension::new(0, 0).to_extension())
                 .write_sample(&Sample {
                     data,
                     duration: now - last_write,

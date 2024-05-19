@@ -1,3 +1,4 @@
+mod extensions;
 mod wrtc;
 
 use anyhow::Result;

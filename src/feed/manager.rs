@@ -257,16 +257,15 @@ impl FeedManager {
                     client_id,
                     std::cmp::min(self.target_bitrate, self.config.start_bitrate),
                 );
-                // send a keyframe for the new client
-                self.compute_target_bitrate()?;
+                self.update_target_bitrate()?;
             }
             FeedControlMessage::BandwidthEstimate { client_id, bitrate } => {
                 self.client_bitrates.insert(client_id, bitrate);
-                self.compute_target_bitrate()?;
+                self.update_target_bitrate()?;
             }
             FeedControlMessage::ClientLeft { client_id } => {
                 self.client_bitrates.remove(&client_id);
-                self.compute_target_bitrate()?;
+                self.update_target_bitrate()?;
             }
             FeedControlMessage::RequestKeyframe => {
                 self.force_keyframe = true;
@@ -279,7 +278,7 @@ impl FeedManager {
     /// Compute the target bitrate as the minimum of all connected client
     /// bitrates. If there are no clients, the target bitrate is set to
     /// `config.start_bitrate`.
-    fn compute_target_bitrate(&mut self) -> Result<()> {
+    fn update_target_bitrate(&mut self) -> Result<()> {
         let min_client_bitrate = self
             .client_bitrates
             .values()
@@ -298,6 +297,8 @@ impl FeedManager {
             target_bitrate: self.target_bitrate,
             max_fps: self.max_fps,
         };
+
+        println!("bitrate {:?}", rate);
 
         self.encoder
             .set_rate(rate)
