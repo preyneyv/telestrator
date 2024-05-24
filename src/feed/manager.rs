@@ -84,7 +84,8 @@ impl FeedConfigBuilder {
 
         let encoder = match self.encoder {
             Some(encoder) => encoder,
-            None => encoders::FeedEncoderConfig::OpenH264(Default::default()),
+            // None => encoders::FeedEncoderConfig::OpenH264(Default::default()),
+            None => encoders::FeedEncoderConfig::Nvenc(Default::default()),
         };
 
         let min_bitrate = self.min_bitrate.unwrap_or(1000);

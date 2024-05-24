@@ -26,7 +26,7 @@ use openh264 as o264;
 use openh264_sys2 as o264_sys;
 
 #[derive(thiserror::Error, Debug)]
-#[error("openh264 error: {0}")]
+#[error("OpenH264 error: {0}")]
 pub struct OpenH264Error(i32);
 
 trait OpenH264ErrorCode {
@@ -45,7 +45,7 @@ impl OpenH264ErrorCode for os::raw::c_int {
 /// Wrapper around VTable methods for ISVCEncoderVtbl.
 #[rustfmt::skip]
 #[allow(dead_code)]
-pub struct OpenH264InnerEncoder {
+ struct OpenH264InnerEncoder {
     pub api: OpenH264API,
     ptr: *mut *const ISVCEncoderVtbl,
 

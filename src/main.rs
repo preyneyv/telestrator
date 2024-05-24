@@ -1,5 +1,4 @@
 mod feed;
-mod ffi;
 mod remote;
 mod timing_stats;
 

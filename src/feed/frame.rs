@@ -1,4 +1,3 @@
-use crate::ffi;
 use anyhow::Result;
 use bytes::Bytes;
 
@@ -98,18 +97,18 @@ impl VideoFrameBuffer {
             let v = u.add(dim >> 2);
             let dest_slices = [y, u, v];
 
-            let rv = ffi::ippi::ippiCbYCr422ToYCbCr420_8u_C2P3R(
+            let rv = ippi_sys::ippiCbYCr422ToYCbCr420_8u_C2P3R(
                 data.as_ptr(),
                 line_stride as _,
                 dest_slices.as_ptr() as _,
                 dest_steps.as_ptr() as _,
-                ffi::ippi::IppiSize {
+                ippi_sys::IppiSize {
                     width: width as _,
                     height: height as _,
                 },
             );
 
-            if rv != ffi::ippi::ippStsNoErr as i32 {
+            if rv != ippi_sys::ippStsNoErr as i32 {
                 Err(ColorConversionError::IPPError(rv))?;
             }
         }

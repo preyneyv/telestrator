@@ -1066,6 +1066,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
+name = "ippi_sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
+]
+
+[[package]]
 name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1369,6 +1376,13 @@ checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "nvidia_sys"
+version = "0.1.0"
+dependencies = [
+ "bindgen",
 ]
 
 [[package]]
@@ -2184,8 +2198,11 @@ dependencies = [
  "bindgen",
  "bytes",
  "enum_delegate",
+ "ippi_sys",
  "minifb",
  "ndi",
+ "nvidia_sys",
+ "once_cell",
  "openh264",
  "openh264-sys2",
  "serde",
