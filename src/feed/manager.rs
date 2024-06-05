@@ -299,7 +299,7 @@ impl FeedManager {
             max_fps: self.max_fps,
         };
 
-        println!("bitrate {:?}", rate);
+        // println!("bitrate {:?}", rate);
 
         self.encoder
             .set_rate(rate)

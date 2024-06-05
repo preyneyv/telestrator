@@ -1,11 +1,13 @@
 pub mod cuda;
 mod nvenc;
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use nvidia_sys as nv;
+
+use crate::feed::frame::Resolution;
 
 use super::{FeedEncoder, FeedEncoderConfigImpl, FeedEncoderImpl, RateParameters};
 
@@ -26,15 +28,16 @@ impl FeedEncoderConfigImpl for NvencFeedEncoderConfig {
     }
 }
 
-struct NvencInnerEncoder {
-    device: Arc<cuda::Device>,
-    ctx: Arc<cuda::Context>,
-    session: nvenc::EncodeSession,
+pub struct NvencFeedEncoder {
+    config: NvencFeedEncoderConfig,
+    encoder: nvenc::EncodeSession,
+    previous_resolution: Option<Resolution>,
+    previous_rate: RateParameters,
 }
 
-impl NvencInnerEncoder {
-    pub fn new(cu_idx: i32) -> Result<Self> {
-        let device = Arc::from(cuda::Device::new(cu_idx)?);
+impl NvencFeedEncoder {
+    pub fn new(config: &NvencFeedEncoderConfig, rate: RateParameters) -> Result<Self> {
+        let device = Rc::from(cuda::Device::new(config.cuda_idx)?);
         println!("Selected GPU: {}", device.name()?);
 
         // Ensure that NVENC is supported.
@@ -43,39 +46,22 @@ impl NvencInnerEncoder {
             bail!("Selected GPU doesn't support NVENC.");
         }
 
-        let ctx = Arc::from(cuda::Context::new(
+        let ctx = Rc::from(cuda::Context::new(
             nv::cuda::CUctx_flags_enum::CU_CTX_SCHED_BLOCKING_SYNC,
             &device,
         )?);
         println!("CUDA CTX API Version {}", ctx.api_version()?);
 
-        let session = nvenc::EncodeSession::new(&ctx)?;
-        if !session.supports_codec(&nvenc::Codec::H264)? {
+        let encoder = nvenc::EncodeSession::new(&ctx)?;
+        if !encoder.supports_codec(&nvenc::Codec::H264)? {
             bail!("H264 is not supported by the selected encoder.");
         }
-        println!(
-            "formats: {:?}",
-            session.get_input_formats(&nvenc::Codec::H264)?
-        );
-        Ok(Self {
-            device,
-            ctx,
-            session,
-        })
-    }
-}
 
-pub struct NvencFeedEncoder {
-    config: NvencFeedEncoderConfig,
-    encoder: NvencInnerEncoder,
-}
-
-impl NvencFeedEncoder {
-    pub fn new(config: &NvencFeedEncoderConfig, rate: RateParameters) -> Result<Self> {
-        let encoder = NvencInnerEncoder::new(config.cuda_idx)?;
         Ok(Self {
             config: config.to_owned(),
             encoder,
+            previous_rate: rate,
+            previous_resolution: None,
         })
     }
 }
@@ -86,7 +72,26 @@ impl FeedEncoderImpl for NvencFeedEncoder {
         frame: &crate::feed::frame::VideoFrameBuffer,
         flags: super::EncoderFrameFlags,
     ) -> Result<bytes::Bytes> {
-        Ok(Bytes::new())
+        let resolution = frame.resolution();
+        if self.previous_resolution != Some(resolution) {
+            if self.previous_resolution.is_none() {
+                // First initialization
+                self.encoder
+                    .initialize(&resolution, &self.previous_rate)
+                    .context("couldn't initialize encoder.")?;
+            } else {
+                println!("TODO handle resolution change");
+            }
+
+            self.previous_resolution = Some(resolution);
+        }
+
+        let bytes = self
+            .encoder
+            .encode_picture(&frame, flags.force_keyframe)
+            .context("couldn't encode frame")?;
+
+        Ok(bytes)
     }
 
     fn set_rate(&mut self, rate: RateParameters) -> Result<()> {

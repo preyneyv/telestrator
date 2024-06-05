@@ -2,7 +2,7 @@ use std::{
     ffi::{CStr, CString},
     os::raw::{c_char, c_int, c_uint},
     ptr::{null, null_mut},
-    sync::Arc,
+    rc::Rc,
 };
 
 use once_cell::sync::OnceCell;
@@ -115,11 +115,11 @@ impl Device {
 
 pub struct Context {
     raw: sys::CUcontext,
-    dev: Arc<Device>,
+    dev: Rc<Device>,
 }
 
 impl Context {
-    pub fn new(flags: sys::CUctx_flags_enum, dev: &Arc<Device>) -> Result<Self> {
+    pub fn new(flags: sys::CUctx_flags_enum, dev: &Rc<Device>) -> Result<Self> {
         init()?;
 
         let dev = dev.clone();
