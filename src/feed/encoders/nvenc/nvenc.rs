@@ -1,11 +1,12 @@
-use std::{ffi::c_void, ptr, rc::Rc, sync::Arc};
+use std::{ffi::c_void, ops::Deref, ptr, rc::Rc};
 
+use anyhow::Context;
 use bytes::Bytes;
 use nvidia_sys::nvencodeapi::{self as sys};
 
 use crate::feed::{
     encoders::RateParameters,
-    frame::{Resolution, VideoFrameBuffer, VideoFramePixelFormat},
+    frame::{Resolution, VideoFrameBuffer},
 };
 
 use super::cuda;
@@ -35,26 +36,7 @@ impl NvencErrorCode for sys::NVENCSTATUS {
 }
 
 type Result<T> = std::result::Result<T, NvencError>;
-type NvencAPI = Rc<sys::NV_ENCODE_API_FUNCTION_LIST>;
-
-// impl TryInto<sys::NV_ENC_BUFFER_FORMAT> for VideoFramePixelFormat {
-//     type Error = anyhow::Error;
-//     // fn try_into(self) -> sys::NV_ENC_BUFFER_FORMAT {
-//     //     use sys::NV_ENC_BUFFER_FORMAT::*;
-//     //     use VideoFramePixelFormat::*;
-//     //     match self {
-//     //         I420 => NV_ENC_BUFFER_FORMAT_IYUV,
-//     //     }
-//     // }
-//     fn try_into(self) -> std::result::Result<sys::NV_ENC_BUFFER_FORMAT, Self::Error> {
-//         use sys::NV_ENC_BUFFER_FORMAT::*;
-//         use VideoFramePixelFormat::*;
-//         Ok(match self {
-//             I420 => NV_ENC_BUFFER_FORMAT_IYUV,
-//             UYVY
-//         })
-//     }
-// }
+type EncoderAPI = Rc<InnerEncoderAPI>;
 
 /// Throws NV_ENC_ERR_INVALID_PARAM if functions are missing from API instance.
 fn make_encode_api() -> Result<sys::NV_ENCODE_API_FUNCTION_LIST> {
@@ -109,70 +91,131 @@ fn make_encode_api() -> Result<sys::NV_ENCODE_API_FUNCTION_LIST> {
     Ok(api)
 }
 
-// pub struct InputBuffer {
-//     api: NvencAPI,
-// }
-// impl InputBuffer {
-//     pub fn new(api: &NvencAPI) -> Result<Self> {
-//         let api = api.clone();
-//         unsafe {
-//             api.nvEncCreateInputBuffer.unwrap_unchecked()()
-//         }
-//         Ok(Self { api: api.clone() })
-//     }
-// }
-
-pub struct EncodeSession {
+struct InnerEncoderAPI {
     // tie ctx lifetime to encode session
     _ctx: Rc<cuda::Context>,
 
-    api: NvencAPI,
-    encoder_ptr: *mut c_void,
-    input_buffer: Option<sys::NV_ENC_INPUT_PTR>,
-    output_bitstream: Option<sys::NV_ENC_OUTPUT_PTR>,
+    api: sys::NV_ENCODE_API_FUNCTION_LIST,
+    raw: *mut c_void,
 }
-
-impl EncodeSession {
-    pub fn new(ctx: &Rc<cuda::Context>) -> anyhow::Result<Self> {
-        let ctx = ctx.clone();
-        let api = Rc::new(make_encode_api()?);
-
+impl InnerEncoderAPI {
+    pub fn new(ctx: &Rc<cuda::Context>) -> Result<Self> {
+        let api = make_encode_api()?;
         let mut params = sys::NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS {
             version: sys::NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER,
             apiVersion: sys::NVENCAPI_VERSION,
             deviceType: sys::_NV_ENC_DEVICE_TYPE::NV_ENC_DEVICE_TYPE_CUDA,
-            device: ctx.as_ptr().cast(),
+            device: (*ctx.as_ptr()).cast(),
             ..Default::default()
         };
-
-        let encoder_ptr = unsafe {
+        let ptr = unsafe {
             let mut enc: *mut c_void = ptr::null_mut();
             api.nvEncOpenEncodeSessionEx.unwrap_unchecked()(&mut params, &mut enc).ok()?;
             enc
         };
-        println!("acquired encoder! {:?}", encoder_ptr);
         Ok(Self {
-            _ctx: ctx,
-
+            _ctx: ctx.clone(),
             api,
-            encoder_ptr,
-            input_buffer: None,
-            output_bitstream: None,
+            raw: ptr,
         })
+    }
+
+    pub unsafe fn create_input_buffer(
+        &self,
+        params: &mut sys::NV_ENC_CREATE_INPUT_BUFFER,
+    ) -> Result<()> {
+        params.version = sys::NV_ENC_CREATE_INPUT_BUFFER_VER;
+        self.api.nvEncCreateInputBuffer.unwrap_unchecked()(self.raw, params).ok()
+    }
+
+    pub unsafe fn lock_input_buffer(
+        &self,
+        params: &mut sys::NV_ENC_LOCK_INPUT_BUFFER,
+    ) -> Result<()> {
+        params.version = sys::NV_ENC_LOCK_INPUT_BUFFER_VER;
+        self.api.nvEncLockInputBuffer.unwrap_unchecked()(self.raw, params).ok()
+    }
+
+    pub unsafe fn unlock_input_buffer(&self, buffer: *mut c_void) -> Result<()> {
+        self.api.nvEncUnlockInputBuffer.unwrap_unchecked()(self.raw, buffer).ok()
+    }
+
+    pub unsafe fn destroy_input_buffer(&self, buffer: *mut c_void) -> Result<()> {
+        self.api.nvEncDestroyInputBuffer.unwrap_unchecked()(self.raw, buffer).ok()
+    }
+
+    pub unsafe fn create_bitstream_buffer(
+        &self,
+        params: &mut sys::NV_ENC_CREATE_BITSTREAM_BUFFER,
+    ) -> Result<()> {
+        params.version = sys::NV_ENC_CREATE_BITSTREAM_BUFFER_VER;
+        self.api.nvEncCreateBitstreamBuffer.unwrap_unchecked()(self.raw, params).ok()
+    }
+
+    pub unsafe fn lock_bitstream(&self, params: &mut sys::NV_ENC_LOCK_BITSTREAM) -> Result<()> {
+        params.version = sys::NV_ENC_LOCK_BITSTREAM_VER;
+        self.api.nvEncLockBitstream.unwrap_unchecked()(self.raw, params).ok()
+    }
+
+    pub unsafe fn unlock_bitstream(&self, buffer: *mut c_void) -> Result<()> {
+        self.api.nvEncUnlockBitstream.unwrap_unchecked()(self.raw, buffer).ok()
+    }
+
+    pub unsafe fn destroy_bitstream_buffer(&self, buffer: *mut c_void) -> Result<()> {
+        self.api.nvEncDestroyBitstreamBuffer.unwrap_unchecked()(self.raw, buffer).ok()
+    }
+
+    pub unsafe fn get_encode_preset_config_ex(
+        &self,
+        encode_guid: sys::GUID,
+        preset_guid: sys::GUID,
+        tuning: sys::NV_ENC_TUNING_INFO,
+        params: &mut sys::NV_ENC_PRESET_CONFIG,
+    ) -> Result<()> {
+        params.version = sys::NV_ENC_PRESET_CONFIG_VER;
+        params.presetCfg.version = sys::NV_ENC_CONFIG_VER;
+        self.api.nvEncGetEncodePresetConfigEx.unwrap_unchecked()(
+            self.raw,
+            encode_guid,
+            preset_guid,
+            tuning,
+            params,
+        )
+        .ok()
+    }
+
+    pub unsafe fn initialize_encoder(
+        &self,
+        params: &mut sys::NV_ENC_INITIALIZE_PARAMS,
+    ) -> Result<()> {
+        params.version = sys::NV_ENC_INITIALIZE_PARAMS_VER;
+        self.api.nvEncInitializeEncoder.unwrap_unchecked()(self.raw, params).ok()
+    }
+
+    pub unsafe fn reconfigure_encoder(
+        &self,
+        params: &mut sys::NV_ENC_RECONFIGURE_PARAMS,
+    ) -> Result<()> {
+        params.version = sys::NV_ENC_RECONFIGURE_PARAMS_VER;
+        self.api.nvEncReconfigureEncoder.unwrap_unchecked()(self.raw, params).ok()
+    }
+
+    pub unsafe fn encode_picture(&self, params: &mut sys::NV_ENC_PIC_PARAMS) -> Result<()> {
+        params.version = sys::NV_ENC_PIC_PARAMS_VER;
+        self.api.nvEncEncodePicture.unwrap_unchecked()(self.raw, params).ok()
     }
 
     pub fn get_codec_guids(&self) -> Result<Vec<sys::GUID>> {
         let mut count = 0;
         unsafe {
-            self.api.nvEncGetEncodeGUIDCount.unwrap_unchecked()(self.encoder_ptr, &mut count)
-                .ok()?;
+            self.api.nvEncGetEncodeGUIDCount.unwrap_unchecked()(self.raw, &mut count).ok()?;
         };
 
         let mut guids = Vec::with_capacity(count as usize);
         let mut out_count = 0;
         unsafe {
             self.api.nvEncGetEncodeGUIDs.unwrap_unchecked()(
-                self.encoder_ptr,
+                self.raw,
                 guids.as_mut_ptr(),
                 count,
                 &mut out_count,
@@ -183,11 +226,6 @@ impl EncodeSession {
 
         Ok(guids)
     }
-
-    pub fn supports_codec(&self, &codec_guid: &sys::GUID) -> Result<bool> {
-        Ok(self.get_codec_guids()?.contains(&codec_guid))
-    }
-
     /// Get vec of supported input formats
     pub fn get_input_formats(
         &self,
@@ -195,19 +233,15 @@ impl EncodeSession {
     ) -> Result<Vec<sys::NV_ENC_BUFFER_FORMAT>> {
         let mut count = 0;
         unsafe {
-            self.api.nvEncGetInputFormatCount.unwrap_unchecked()(
-                self.encoder_ptr,
-                codec_guid,
-                &mut count,
-            )
-            .ok()?;
+            self.api.nvEncGetInputFormatCount.unwrap_unchecked()(self.raw, codec_guid, &mut count)
+                .ok()?;
         };
 
         let mut formats = Vec::with_capacity(count as usize);
         let mut out_count = 0;
         unsafe {
             self.api.nvEncGetInputFormats.unwrap_unchecked()(
-                self.encoder_ptr,
+                self.raw,
                 codec_guid,
                 formats.as_mut_ptr(),
                 count,
@@ -219,76 +253,252 @@ impl EncodeSession {
 
         Ok(formats)
     }
+}
 
-    fn initialize_input_buffer(&mut self, resolution: &Resolution) -> Result<()> {
-        assert_eq!(self.input_buffer, None, "input buffer already initialized");
+impl Deref for InnerEncoderAPI {
+    type Target = *mut c_void;
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+
+impl Drop for InnerEncoderAPI {
+    fn drop(&mut self) {
+        unsafe {
+            self.api.nvEncDestroyEncoder.unwrap_unchecked()(self.raw)
+                .ok()
+                .unwrap_or_else(|e| eprintln!("unable to destroy encoder: {}", e))
+        };
+    }
+}
+
+struct InputBufferGuard {
+    buf_ptr: sys::NV_ENC_INPUT_PTR,
+    api: EncoderAPI,
+
+    raw: *mut u8,
+    pub pitch: u32,
+}
+impl InputBufferGuard {
+    fn lock_buffer(buffer: &InputBuffer) -> Result<Self> {
+        let api = &buffer.api;
+        let mut params = sys::NV_ENC_LOCK_INPUT_BUFFER {
+            inputBuffer: **buffer,
+            ..Default::default()
+        };
+        unsafe { api.lock_input_buffer(&mut params)? };
+        Ok(Self {
+            api: api.clone(),
+            buf_ptr: **buffer,
+            raw: params.bufferDataPtr as *mut u8,
+            pitch: params.pitch,
+        })
+    }
+}
+impl Deref for InputBufferGuard {
+    type Target = *mut u8;
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+impl Drop for InputBufferGuard {
+    fn drop(&mut self) {
+        unsafe {
+            self.api
+                .unlock_input_buffer(self.buf_ptr)
+                .unwrap_or_else(|e| eprintln!("unable to unlock input buffer: {}", e))
+        };
+    }
+}
+
+struct InputBuffer {
+    api: EncoderAPI,
+    raw: sys::NV_ENC_INPUT_PTR,
+    pub resolution: Resolution,
+}
+impl InputBuffer {
+    pub fn new(api: &EncoderAPI, resolution: &Resolution) -> Result<Self> {
+        let api = api.clone();
         let mut params = sys::NV_ENC_CREATE_INPUT_BUFFER {
-            version: sys::NV_ENC_CREATE_INPUT_BUFFER_VER,
-            // width: MAX_DIM,
-            // height: MAX_DIM,
             width: resolution.0,
             height: resolution.1,
             bufferFmt: sys::NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_IYUV,
 
             ..Default::default()
         };
-        unsafe {
-            self.api.nvEncCreateInputBuffer.unwrap_unchecked()(self.encoder_ptr, &mut params)
-                .ok()?;
-        }
-        self.input_buffer = Some(params.inputBuffer);
-        Ok(())
+        unsafe { api.create_input_buffer(&mut params)? };
+        let raw = params.inputBuffer;
+
+        Ok(Self {
+            api,
+            raw,
+            resolution: resolution.clone(),
+        })
     }
 
-    fn initialize_output_bitstream(&mut self) -> Result<()> {
-        assert_eq!(
-            self.output_bitstream, None,
-            "output bitstream already initialized"
-        );
-        let mut params = sys::NV_ENC_CREATE_BITSTREAM_BUFFER {
-            version: sys::NV_ENC_CREATE_BITSTREAM_BUFFER_VER,
+    pub fn lock(&self) -> Result<InputBufferGuard> {
+        InputBufferGuard::lock_buffer(&self)
+    }
+}
+impl Deref for InputBuffer {
+    type Target = sys::NV_ENC_INPUT_PTR;
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+impl Drop for InputBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            self.api
+                .destroy_input_buffer(self.raw)
+                .unwrap_or_else(|e| eprintln!("unable to destroy input buffer: {}", e))
+        };
+    }
+}
+
+struct BitstreamBufferGuard {
+    buf_ptr: sys::NV_ENC_OUTPUT_PTR,
+    api: EncoderAPI,
+
+    pub params: sys::NV_ENC_LOCK_BITSTREAM,
+    raw: *mut u8,
+    pub size: u32,
+}
+impl BitstreamBufferGuard {
+    fn lock_buffer(buffer: &BitstreamBuffer) -> Result<Self> {
+        let api = &buffer.api;
+        let mut params = sys::NV_ENC_LOCK_BITSTREAM {
+            outputBitstream: **buffer,
             ..Default::default()
         };
+        unsafe { api.lock_bitstream(&mut params)? };
+        Ok(Self {
+            api: api.clone(),
+            buf_ptr: **buffer,
+
+            params,
+            raw: params.bitstreamBufferPtr as *mut u8,
+            size: params.bitstreamSizeInBytes,
+        })
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(**self, self.size as _) }
+    }
+}
+impl Deref for BitstreamBufferGuard {
+    type Target = *mut u8;
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+impl Drop for BitstreamBufferGuard {
+    fn drop(&mut self) {
         unsafe {
-            self.api.nvEncCreateBitstreamBuffer.unwrap_unchecked()(self.encoder_ptr, &mut params)
-                .ok()?;
-        }
-        self.output_bitstream = Some(params.bitstreamBuffer);
-        Ok(())
+            self.api
+                .unlock_bitstream(self.buf_ptr)
+                .unwrap_or_else(|e| eprintln!("unable to unlock bitstream: {}", e))
+        };
+    }
+}
+
+struct BitstreamBuffer {
+    api: EncoderAPI,
+    raw: sys::NV_ENC_OUTPUT_PTR,
+}
+impl BitstreamBuffer {
+    pub fn new(api: &EncoderAPI) -> Result<Self> {
+        let api = api.clone();
+        let mut params: sys::NV_ENC_CREATE_BITSTREAM_BUFFER = Default::default();
+        unsafe { api.create_bitstream_buffer(&mut params)? };
+        let raw = params.bitstreamBuffer;
+
+        Ok(Self { api, raw })
     }
 
-    pub fn initialize(&mut self, resolution: &Resolution, rate: &RateParameters) -> Result<()> {
+    pub fn lock(&self) -> Result<BitstreamBufferGuard> {
+        BitstreamBufferGuard::lock_buffer(&self)
+    }
+}
+impl Deref for BitstreamBuffer {
+    type Target = sys::NV_ENC_INPUT_PTR;
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+impl Drop for BitstreamBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            self.api
+                .destroy_bitstream_buffer(self.raw)
+                .unwrap_or_else(|e| eprintln!("unable to destroy bitstream buffer: {}", e))
+        };
+    }
+}
+
+pub struct EncodeSession {
+    api: EncoderAPI,
+    input_buffer: Option<InputBuffer>,
+    output_bitstream: Option<BitstreamBuffer>,
+}
+
+impl EncodeSession {
+    pub fn new(ctx: &Rc<cuda::Context>) -> anyhow::Result<Self> {
+        let api = Rc::new(InnerEncoderAPI::new(ctx)?);
+        Ok(Self {
+            api,
+            input_buffer: None,
+            output_bitstream: None,
+        })
+    }
+
+    pub fn get_codec_guids(&self) -> Result<Vec<sys::GUID>> {
+        self.api.get_codec_guids()
+    }
+
+    pub fn supports_codec(&self, &codec_guid: &sys::GUID) -> Result<bool> {
+        Ok(self.get_codec_guids()?.contains(&codec_guid))
+    }
+
+    /// Get vec of supported input formats
+    pub fn get_input_formats(
+        &self,
+        &codec_guid: &sys::GUID,
+    ) -> Result<Vec<sys::NV_ENC_BUFFER_FORMAT>> {
+        self.api.get_input_formats(&codec_guid)
+    }
+
+    fn make_config(
+        &self,
+        resolution: &Resolution,
+        rate: &RateParameters,
+    ) -> Result<sys::NV_ENC_INITIALIZE_PARAMS> {
         let encode_guid = Codec::H264;
-        let preset_guid = Preset::P5;
-        // let mut encode_config = unsafe {
-        //     let mut conf = sys::NV_ENC_PRESET_CONFIG {
-        //         version: sys::NV_ENC_PRESET_CONFIG_VER,
-        //         ..Default::default()
-        //     };
-        //     self.api.nvEncGetEncodePresetConfig.unwrap_unchecked()(
-        //         self.encoder_ptr,
-        //         encode_guid,
-        //         preset_guid,
-        //         &mut conf,
-        //     )
-        //     .ok()?;
-        //     conf.presetCfg
-        // };
+        let preset_guid = Preset::P4;
+        let tuning = sys::NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY;
+        let mut encode_config = unsafe {
+            let mut conf: sys::NV_ENC_PRESET_CONFIG = Default::default();
+            self.api
+                .get_encode_preset_config_ex(encode_guid, preset_guid, tuning, &mut conf)?;
+            conf.presetCfg
+        };
 
-        // encode_config.gopLength = sys::NVENC_INFINITE_GOPLENGTH;
-        // encode_config.frameIntervalP = 1;
-        // encode_config.frameFieldMode = sys::NV_ENC_PARAMS_FRAME_FIELD_MODE::NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
-        // encode_config.rcParams.
+        encode_config.gopLength = 10;
+        encode_config.frameIntervalP = 1;
+        encode_config.frameFieldMode =
+            sys::NV_ENC_PARAMS_FRAME_FIELD_MODE::NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
+        encode_config.rcParams.rateControlMode = sys::NV_ENC_PARAMS_RC_MODE::NV_ENC_PARAMS_RC_CBR;
+        encode_config.rcParams.averageBitRate = rate.target_bitrate;
 
-        let mut params = sys::NV_ENC_INITIALIZE_PARAMS {
+        Ok(sys::NV_ENC_INITIALIZE_PARAMS {
             version: sys::NV_ENC_INITIALIZE_PARAMS_VER,
-            tuningInfo: sys::NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY,
             maxEncodeHeight: MAX_DIM,
             maxEncodeWidth: MAX_DIM,
-            // encodeConfig: &mut encode_config,
+
             enableEncodeAsync: 0,
             enablePTD: 1,
 
+            encodeConfig: &mut encode_config,
+            tuningInfo: tuning,
             encodeGUID: encode_guid,
             presetGUID: preset_guid,
 
@@ -302,110 +512,91 @@ impl EncodeSession {
             frameRateDen: 1,
 
             ..Default::default()
-        };
-        unsafe {
-            self.api.nvEncInitializeEncoder.unwrap_unchecked()(self.encoder_ptr, &mut params)
-                .ok()?
-        };
+        })
+    }
 
-        self.initialize_input_buffer(&resolution)?;
-        self.initialize_output_bitstream()?;
+    pub fn initialize(&mut self, resolution: &Resolution, rate: &RateParameters) -> Result<()> {
+        let mut params = self.make_config(resolution, rate)?;
+        unsafe { self.api.initialize_encoder(&mut params)? };
+
+        self.input_buffer = Some(InputBuffer::new(&self.api, &resolution)?);
+        self.output_bitstream = Some(BitstreamBuffer::new(&self.api)?);
+
+        Ok(())
+    }
+
+    pub fn update_rates(&mut self, resolution: &Resolution, rate: &RateParameters) -> Result<()> {
+        let initialize_param = self.make_config(resolution, rate)?;
+        let mut params = sys::NV_ENC_RECONFIGURE_PARAMS {
+            reInitEncodeParams: initialize_param,
+            ..Default::default()
+        };
+        params.set_forceIDR(1);
+        params.set_resetEncoder(1);
+        unsafe { self.api.reconfigure_encoder(&mut params)? };
+
+        match &self.input_buffer {
+            Some(buf) => {
+                if buf.resolution != *resolution {
+                    self.input_buffer = Some(InputBuffer::new(&self.api, &resolution)?);
+                }
+            }
+            None => {
+                eprintln!("tried to update rate without existing buffer")
+            }
+        };
 
         Ok(())
     }
 
     fn prep_frame_data(&self, frame: &VideoFrameBuffer) -> anyhow::Result<()> {
-        assert_ne!(self.input_buffer, None, "no input buffer present");
-        let input_buffer = self.input_buffer.unwrap();
+        let frame = frame.to_i420()?;
 
-        let mut params = sys::NV_ENC_LOCK_INPUT_BUFFER {
-            version: sys::NV_ENC_LOCK_INPUT_BUFFER_VER,
-            inputBuffer: input_buffer,
-            ..Default::default()
-        };
-        unsafe {
-            self.api.nvEncLockInputBuffer.unwrap_unchecked()(self.encoder_ptr, &mut params).ok()?
-        };
-
-        let ptr = params.bufferDataPtr;
-        // println!("buffer data: {:?} p{:?}", ptr, params.pitch);
+        let dst = self
+            .input_buffer
+            .as_ref()
+            .context("no input buffer present")?
+            .lock()?;
 
         unsafe {
+            // luma slice
             let src = frame.data.as_ptr();
-            let dst = params.bufferDataPtr as *mut u8;
-            let src_pitch = frame.width;
-            let dst_pitch = params.pitch as usize;
-            let stride_count = frame.data.len() / src_pitch;
-            let dim = frame.height;
-            let slices = frame.yuv_slices();
+            let d_pitch = dst.pitch as usize;
+            let width = frame.width;
+            let height = frame.height;
 
-            // slice Y
-            let target = slices.0.as_ptr();
-            for i in 0..dim {
-                std::ptr::copy::<u8>(target.add(i * src_pitch), dst.add(i * dst_pitch), src_pitch);
+            for i in 0..height {
+                std::ptr::copy::<u8>(src.add(i * width), dst.add(i * d_pitch), width);
             }
 
-            let dst = dst.add(dim * dst_pitch);
-            let target = slices.1.as_ptr();
-            for i in 0..dim / 4 {
-                std::ptr::write_bytes(dst.add(i * dst_pitch), 255u8, dst_pitch / 4);
-                // std::ptr::copy::<u8>(target.add(i * src_pitch), dst.add(i * dst_pitch), src_pitch);
+            // chroma slices (U followed by V)
+            // 2x2 subsampling
+            let src = src.add(height * width);
+            let dst = dst.add(height * d_pitch);
+            let subsamp_width = width / 2;
+            let subsamp_height = height / 2;
+            let subsamp_d_pitch = d_pitch / 2;
+
+            for i in 0..subsamp_height * 2 {
+                std::ptr::copy::<u8>(
+                    src.add(i * subsamp_width),
+                    dst.add(i * subsamp_d_pitch),
+                    subsamp_width,
+                );
             }
-            // std::ptr::write_bytes(dst, 0u8, dst_pitch * dim / 4);
-
-            // slice V
-            // let dst = dst.add(dim / 4 * dst_pitch);
-            // std::ptr::write_bytes(dst, 255u8, dst_pitch * dim / 4);
-
-            // slice U
-            // let target = slices.1.as_ptr();
-            // for i in 0..dim / 4 {
-            //     std::ptr::copy::<u8>(
-            //         target.add(i * src_pitch / 2),
-            //         dst.add((dim * 2 + i) * dst_pitch),
-            //         src_pitch / 2,
-            //     );
-            // }
-
-            // // slice V
-            // let target = slices.2.as_ptr();
-            // for i in 0..dim / 4 {
-            //     std::ptr::copy::<u8>(
-            //         target.add(i * src_pitch / 2),
-            //         dst.add((dim * 2 + i) * dst_pitch / 2),
-            //         src_pitch / 2,
-            //     );
-            // }
-
-            // for i in 0..frame.height {
-            //     std::ptr::copy::<u8>(src.add(i * src_pitch), dst.add(i * dst_pitch), src_pitch);
-            // }
-            // for i in frame.height..frame.height +
-            // std::ptr::copy::<u8>(frame.data.as_ptr(), ptr.cast(), frame.data.len());
-
-            self.api.nvEncUnlockInputBuffer.unwrap_unchecked()(self.encoder_ptr, input_buffer)
-                .ok()?;
         };
 
         Ok(())
     }
 
     fn read_output_data(&self) -> anyhow::Result<Bytes> {
-        assert_ne!(self.output_bitstream, None, "no output bitstream present");
-        let output_bitstream = self.output_bitstream.unwrap();
-        let mut params = sys::NV_ENC_LOCK_BITSTREAM {
-            version: sys::NV_ENC_LOCK_BITSTREAM_VER,
-            outputBitstream: output_bitstream,
-            ..Default::default()
-        };
-        unsafe {
-            self.api.nvEncLockBitstream.unwrap_unchecked()(self.encoder_ptr, &mut params).ok()?;
-        }
+        let buf = self
+            .output_bitstream
+            .as_ref()
+            .context("no output bitstream present")?
+            .lock()?;
 
-        let ptr = params.bitstreamBufferPtr;
-        let size = params.bitstreamSizeInBytes;
-        let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, size as _) };
-        let bytes = Bytes::copy_from_slice(slice);
+        let bytes = Bytes::copy_from_slice(buf.as_slice());
         Ok(bytes)
     }
 
@@ -414,11 +605,9 @@ impl EncodeSession {
         frame: &VideoFrameBuffer,
         force_keyframe: bool,
     ) -> anyhow::Result<Bytes> {
-        let frame = frame.to_i420()?;
         self.prep_frame_data(&frame)?;
 
         let mut params = sys::NV_ENC_PIC_PARAMS {
-            version: sys::NV_ENC_PIC_PARAMS_VER,
             inputWidth: frame.width as _,
             inputHeight: frame.height as _,
             inputPitch: frame.width as _,
@@ -428,32 +617,15 @@ impl EncodeSession {
             } else {
                 Default::default()
             },
-            inputBuffer: self.input_buffer.unwrap(),
-            outputBitstream: self.output_bitstream.unwrap(),
+            inputBuffer: *self.input_buffer.as_deref().unwrap(),
+            outputBitstream: *self.output_bitstream.as_deref().unwrap(),
             bufferFmt: sys::NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_IYUV,
             pictureStruct: sys::NV_ENC_PIC_STRUCT::NV_ENC_PIC_STRUCT_FRAME,
-            // inputTimeStamp: frame.timestamp.to_micros(),
             ..Default::default()
         };
 
-        unsafe {
-            self.api.nvEncEncodePicture.unwrap_unchecked()(self.encoder_ptr, &mut params).ok()?
-        }
+        unsafe { self.api.encode_picture(&mut params)? };
 
         self.read_output_data()
-    }
-}
-
-impl Drop for EncodeSession {
-    fn drop(&mut self) {
-        unsafe {
-            if let Some(ptr) = self.input_buffer {
-                self.api.nvEncDestroyInputBuffer.unwrap_unchecked()(self.encoder_ptr, ptr);
-            }
-            if let Some(ptr) = self.output_bitstream {
-                self.api.nvEncDestroyBitstreamBuffer.unwrap_unchecked()(self.encoder_ptr, ptr);
-            }
-            self.api.nvEncDestroyEncoder.unwrap_unchecked()(self.encoder_ptr);
-        };
     }
 }

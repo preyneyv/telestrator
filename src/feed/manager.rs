@@ -88,9 +88,9 @@ impl FeedConfigBuilder {
             None => encoders::FeedEncoderConfig::Nvenc(Default::default()),
         };
 
-        let min_bitrate = self.min_bitrate.unwrap_or(1000);
-        let start_bitrate = self.start_bitrate.unwrap_or(2000);
-        let max_bitrate = self.max_bitrate.unwrap_or(0);
+        let min_bitrate = self.min_bitrate.unwrap_or(500_000);
+        let start_bitrate = self.start_bitrate.unwrap_or(6_000_000);
+        let max_bitrate = self.max_bitrate.unwrap_or(20_000_000);
 
         let max_fps = self.max_fps.unwrap_or(60.);
         let resolution = self.resolution;
@@ -201,7 +201,7 @@ impl FeedManager {
                 continue;
             }
 
-            // TODO: get_frame() could be block while a keyframe request comes
+            // TODO: get_frame() could block while a keyframe request comes
             // in. If so, the keyframe gets deferred for a really long time.
             let Some(frame) = self.source.get_frame()? else {
                 continue;
@@ -217,9 +217,14 @@ impl FeedManager {
                 .context("failed to encode frame")?;
             stats.end("encode");
 
-            stats.track("bitrate", (8 * data.len()) as _, " bits/frame");
+            stats.track(
+                "bitrate",
+                ((self.max_fps.round() as usize) * 8 * data.len() / 1000) as _,
+                " kb/s",
+            );
 
-            self.rate_limit();
+            // TODO: better rate-limit (adjust for processing time.)
+            // self.rate_limit()
 
             self.feed_result_tx
                 .send(FeedResultMessage::EncodedBitstream(data))
@@ -280,30 +285,43 @@ impl FeedManager {
     /// bitrates. If there are no clients, the target bitrate is set to
     /// `config.start_bitrate`.
     fn update_target_bitrate(&mut self) -> Result<()> {
-        let min_client_bitrate = self
-            .client_bitrates
-            .values()
-            .min()
-            .unwrap_or(&self.config.start_bitrate)
-            .to_owned();
-
-        self.target_bitrate = match (self.config.min_bitrate, self.config.max_bitrate) {
-            (0, 0) => min_client_bitrate,
-            (0, max) => min_client_bitrate.min(max),
-            (min, 0) => min_client_bitrate.max(min),
-            (min, max) => min_client_bitrate.clamp(min, max),
-        };
+        self.target_bitrate = self.config.start_bitrate;
 
         let rate = RateParameters {
             target_bitrate: self.target_bitrate,
             max_fps: self.max_fps,
         };
 
-        // println!("bitrate {:?}", rate);
-
         self.encoder
             .set_rate(rate)
             .context("unable to update rate parameters")?;
         Ok(())
+
+        // TODO: revise this implementation to make it prefer higher bitrates.
+        // Currently, it picks really low bitrates better suited for video calls.
+
+        // let min_client_bitrate = self
+        //     .client_bitrates
+        //     .values()
+        //     .min()
+        //     .unwrap_or(&self.config.start_bitrate)
+        //     .to_owned();
+
+        // self.target_bitrate = match (self.config.min_bitrate, self.config.max_bitrate) {
+        //     (0, 0) => min_client_bitrate,
+        //     (0, max) => min_client_bitrate.min(max),
+        //     (min, 0) => min_client_bitrate.max(min),
+        //     (min, max) => min_client_bitrate.clamp(min, max),
+        // };
+
+        // let rate = RateParameters {
+        //     target_bitrate: self.target_bitrate,
+        //     max_fps: self.max_fps,
+        // };
+
+        // self.encoder
+        //     .set_rate(rate)
+        //     .context("unable to update rate parameters")?;
+        // Ok(())
     }
 }

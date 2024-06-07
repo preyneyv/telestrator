@@ -70,7 +70,7 @@ impl FeedEncoderImpl for NvencFeedEncoder {
     fn encode(
         &mut self,
         frame: &crate::feed::frame::VideoFrameBuffer,
-        flags: super::EncoderFrameFlags,
+        mut flags: super::EncoderFrameFlags,
     ) -> Result<bytes::Bytes> {
         let resolution = frame.resolution();
         if self.previous_resolution != Some(resolution) {
@@ -80,10 +80,13 @@ impl FeedEncoderImpl for NvencFeedEncoder {
                     .initialize(&resolution, &self.previous_rate)
                     .context("couldn't initialize encoder.")?;
             } else {
-                println!("TODO handle resolution change");
+                self.encoder
+                    .update_rates(&resolution, &self.previous_rate)
+                    .context("couldn't update rates")?;
             }
 
             self.previous_resolution = Some(resolution);
+            flags.force_keyframe = true;
         }
 
         let bytes = self
@@ -95,6 +98,16 @@ impl FeedEncoderImpl for NvencFeedEncoder {
     }
 
     fn set_rate(&mut self, rate: RateParameters) -> Result<()> {
+        if self.previous_resolution.is_none() {
+            self.previous_rate = rate;
+            return Ok(());
+        }
+
+        self.encoder
+            .update_rates(&self.previous_resolution.as_ref().unwrap(), &rate)
+            .context("unable to update rates")?;
+
+        self.previous_rate = rate;
         Ok(())
     }
 }

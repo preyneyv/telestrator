@@ -277,7 +277,7 @@ impl FeedEncoderImpl for OpenH264FeedEncoder {
         }
 
         let mut bitrate = SBitrateInfo {
-            iBitrate: (rate.target_bitrate * 1000) as _,
+            iBitrate: rate.target_bitrate as _,
             iLayer: SPATIAL_LAYER_ALL,
         };
 

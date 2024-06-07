@@ -89,8 +89,8 @@ impl Device {
         Ok(Self { raw })
     }
 
-    pub fn as_ptr(&self) -> sys::CUdevice {
-        self.raw
+    pub fn as_ptr(&self) -> &sys::CUdevice {
+        &self.raw
     }
 
     pub fn name(&self) -> Result<String> {
@@ -122,13 +122,15 @@ impl Context {
     pub fn new(flags: sys::CUctx_flags_enum, dev: &Rc<Device>) -> Result<Self> {
         init()?;
 
-        let dev = dev.clone();
         let mut raw: sys::CUcontext = null_mut();
         unsafe {
-            sys::cuCtxCreate_v2(&mut raw, flags as _, dev.as_ptr()).ok()?;
+            sys::cuCtxCreate_v2(&mut raw, flags as _, *dev.as_ptr()).ok()?;
         };
 
-        Ok(Self { raw, dev })
+        Ok(Self {
+            raw,
+            dev: dev.clone(),
+        })
     }
 
     pub fn api_version(&self) -> Result<u32> {
@@ -141,8 +143,8 @@ impl Context {
         Ok(version)
     }
 
-    pub fn as_ptr(&self) -> sys::CUcontext {
-        self.raw
+    pub fn as_ptr(&self) -> &sys::CUcontext {
+        &self.raw
     }
 }
 
