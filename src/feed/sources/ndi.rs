@@ -43,7 +43,7 @@ impl NDIFeedSourceConfig {
 
         return Ok(FeedSourceConfig::NDI(Self {
             source,
-            recv_timeout: 10_000,
+            recv_timeout: 1000,
         }));
     }
 }
@@ -77,7 +77,7 @@ impl FeedSourceImpl for NDIFeedSource {
     fn get_frame(&mut self) -> Result<Option<VideoFrameBuffer>> {
         let start = Instant::now();
         while start.elapsed() < self.recv_timeout {
-            let response = self.recv.capture_video(&mut self.ndi_video_data, 1000);
+            let response = self.recv.capture_video(&mut self.ndi_video_data, 100);
 
             match response {
                 ndi::FrameType::Video => {}

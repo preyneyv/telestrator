@@ -224,7 +224,7 @@ impl FeedManager {
             );
 
             // TODO: better rate-limit (adjust for processing time.)
-            // self.rate_limit()
+            self.rate_limit();
 
             self.feed_result_tx
                 .send(FeedResultMessage::EncodedBitstream(data))

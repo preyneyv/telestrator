@@ -81,7 +81,7 @@ impl FeedEncoderImpl for NvencFeedEncoder {
                     .context("couldn't initialize encoder.")?;
             } else {
                 self.encoder
-                    .update_rates(&resolution, &self.previous_rate)
+                    .update_rate(&resolution, &self.previous_rate, true)
                     .context("couldn't update rates")?;
             }
 
@@ -104,7 +104,7 @@ impl FeedEncoderImpl for NvencFeedEncoder {
         }
 
         self.encoder
-            .update_rates(&self.previous_resolution.as_ref().unwrap(), &rate)
+            .update_rate(&self.previous_resolution.as_ref().unwrap(), &rate, false)
             .context("unable to update rates")?;
 
         self.previous_rate = rate;

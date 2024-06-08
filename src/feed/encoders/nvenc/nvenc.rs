@@ -482,7 +482,7 @@ impl EncodeSession {
             conf.presetCfg
         };
 
-        encode_config.gopLength = 10;
+        encode_config.gopLength = sys::NVENC_INFINITE_GOPLENGTH;
         encode_config.frameIntervalP = 1;
         encode_config.frameFieldMode =
             sys::NV_ENC_PARAMS_FRAME_FIELD_MODE::NV_ENC_PARAMS_FRAME_FIELD_MODE_FRAME;
@@ -525,14 +525,21 @@ impl EncodeSession {
         Ok(())
     }
 
-    pub fn update_rates(&mut self, resolution: &Resolution, rate: &RateParameters) -> Result<()> {
+    pub fn update_rate(
+        &mut self,
+        resolution: &Resolution,
+        rate: &RateParameters,
+        reset: bool,
+    ) -> Result<()> {
         let initialize_param = self.make_config(resolution, rate)?;
         let mut params = sys::NV_ENC_RECONFIGURE_PARAMS {
             reInitEncodeParams: initialize_param,
             ..Default::default()
         };
-        params.set_forceIDR(1);
-        params.set_resetEncoder(1);
+        if reset {
+            params.set_forceIDR(1);
+            params.set_resetEncoder(1);
+        }
         unsafe { self.api.reconfigure_encoder(&mut params)? };
 
         match &self.input_buffer {
@@ -548,6 +555,8 @@ impl EncodeSession {
 
         Ok(())
     }
+
+    // pub fn update_resolution(&mut self, resolution: &Resolution) -> Result<()> {}
 
     fn prep_frame_data(&self, frame: &VideoFrameBuffer) -> anyhow::Result<()> {
         let frame = frame.to_i420()?;
